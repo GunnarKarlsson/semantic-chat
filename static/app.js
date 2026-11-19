@@ -1,7 +1,6 @@
 /**
- * Frontend shell for Semantic Chat.
- * Step 7: structure + view switching.
- * Step 8 will wire the API calls.
+ * Semantic Chat UI — talks to the local Axum API.
+ * UI chats (/api/chats, /api/messages) are separate from remote Chat Completions.
  */
 
 const viewStart = document.getElementById("view-start");
@@ -15,14 +14,15 @@ const messageListEl = document.getElementById("message-list");
 const composerForm = document.getElementById("composer-form");
 const composerInput = document.getElementById("composer-input");
 
-/** @type {"start" | "app"} */
-let currentView = "start";
-
 /** @type {string | null} */
 let activeChatId = null;
 
+/** @type {Array<{id: string, title: string, created_at: string}>} */
+let chatSummaries = [];
+
+let busy = false;
+
 function showStartView() {
-  currentView = "start";
   activeChatId = null;
   viewStart.classList.remove("is-hidden");
   viewApp.classList.add("is-hidden");
@@ -31,10 +31,22 @@ function showStartView() {
 }
 
 function showAppView() {
-  currentView = "app";
   viewStart.classList.add("is-hidden");
   viewApp.classList.remove("is-hidden");
   composerInput.focus();
+}
+
+function setBusy(isBusy) {
+  busy = isBusy;
+  startInput.disabled = isBusy;
+  composerInput.disabled = isBusy;
+  newChatBtn.disabled = isBusy;
+  const submitButtons = document.querySelectorAll(
+    '#start-form button[type="submit"], #composer-form button[type="submit"]'
+  );
+  for (const button of submitButtons) {
+    button.disabled = isBusy;
+  }
 }
 
 function setChatTitle(title) {
@@ -45,50 +57,15 @@ function clearMessages() {
   messageListEl.innerHTML = "";
 }
 
-function renderEmptyChatList() {
-  chatListEl.innerHTML = "";
-  const empty = document.createElement("li");
-  empty.className = "chat-list-empty";
-  empty.textContent = "No chats yet";
-  chatListEl.appendChild(empty);
-}
-
-function renderChatList(chats, activeId) {
-  chatListEl.innerHTML = "";
-  if (!chats || chats.length === 0) {
-    renderEmptyChatList();
-    return;
-  }
-
-  for (const chat of chats) {
-    const li = document.createElement("li");
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "chat-list-item";
-    if (chat.id === activeId) {
-      btn.classList.add("is-active");
-    }
-    btn.textContent = chat.title || "New chat";
-    btn.dataset.chatId = chat.id;
-    btn.addEventListener("click", () => {
-      // Step 8: load chat via GET /api/chats/:id
-      activeChatId = chat.id;
-      setChatTitle(chat.title);
-      renderChatList(chats, activeChatId);
-    });
-    li.appendChild(btn);
-    chatListEl.appendChild(li);
-  }
-}
-
 function appendMessage(role, content) {
   const bubble = document.createElement("article");
+  const normalized = String(role).toLowerCase();
   bubble.className =
-    role === "user" ? "message message-user" : "message message-assistant";
+    normalized === "user" ? "message message-user" : "message message-assistant";
 
   const meta = document.createElement("span");
   meta.className = "message-meta";
-  meta.textContent = role === "user" ? "You" : "Assistant";
+  meta.textContent = normalized === "user" ? "You" : "Assistant";
 
   const body = document.createElement("div");
   body.textContent = content;
@@ -99,42 +76,209 @@ function appendMessage(role, content) {
   messageListEl.scrollTop = messageListEl.scrollHeight;
 }
 
-startForm.addEventListener("submit", (event) => {
+function renderMessages(messages) {
+  clearMessages();
+  for (const message of messages || []) {
+    appendMessage(message.role, message.content);
+  }
+}
+
+function renderChatList() {
+  chatListEl.innerHTML = "";
+  if (!chatSummaries.length) {
+    const empty = document.createElement("li");
+    empty.className = "chat-list-empty";
+    empty.textContent = "No chats yet";
+    chatListEl.appendChild(empty);
+    return;
+  }
+
+  for (const chat of chatSummaries) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chat-list-item";
+    if (chat.id === activeChatId) {
+      btn.classList.add("is-active");
+    }
+    btn.textContent = chat.title || "New chat";
+    btn.addEventListener("click", () => {
+      void selectChat(chat.id);
+    });
+    li.appendChild(btn);
+    chatListEl.appendChild(li);
+  }
+}
+
+async function api(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (options.body && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const response = await fetch(path, { ...options, headers });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Request failed (${response.status})`);
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+  return JSON.parse(text);
+}
+
+async function refreshChatList() {
+  chatSummaries = await api("/api/chats");
+  renderChatList();
+}
+
+async function selectChat(chatId) {
+  if (busy) {
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const session = await api(`/api/chats/${chatId}`);
+    activeChatId = session.id;
+    setChatTitle(session.title);
+    renderMessages(session.messages);
+    renderChatList();
+    showAppView();
+  } catch (error) {
+    console.error(error);
+    window.alert(`Could not load chat: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function createChat() {
+  return api("/api/chats", { method: "POST", body: "{}" });
+}
+
+async function sendMessage(chatId, message) {
+  return api("/api/messages", {
+    method: "POST",
+    body: JSON.stringify({ chat_id: chatId, message }),
+  });
+}
+
+startForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (busy) {
+    return;
+  }
+
   const text = startInput.value.trim();
   if (!text) {
     return;
   }
 
-  // Step 8: POST /api/chats then POST /api/messages
-  showAppView();
-  setChatTitle(text.length > 48 ? `${text.slice(0, 48)}…` : text);
-  clearMessages();
-  appendMessage("user", text);
-  renderChatList([], null);
-  composerInput.value = "";
+  setBusy(true);
+  try {
+    const created = await createChat();
+    activeChatId = created.id;
+    showAppView();
+    setChatTitle(created.title);
+    clearMessages();
+    appendMessage("user", text);
+
+    const result = await sendMessage(created.id, text);
+    appendMessage("assistant", result.reply);
+
+    await refreshChatList();
+    const active = chatSummaries.find((chat) => chat.id === activeChatId);
+    if (active) {
+      setChatTitle(active.title);
+    }
+    startInput.value = "";
+    composerInput.value = "";
+  } catch (error) {
+    console.error(error);
+    window.alert(`Could not start chat: ${error.message}`);
+  } finally {
+    setBusy(false);
+    if (activeChatId) {
+      composerInput.focus();
+    } else {
+      startInput.focus();
+    }
+  }
 });
 
-newChatBtn.addEventListener("click", () => {
-  // Step 8: POST /api/chats and reset the thread
-  activeChatId = null;
-  setChatTitle("New chat");
-  clearMessages();
-  showAppView();
-  composerInput.focus();
+newChatBtn.addEventListener("click", async () => {
+  if (busy) {
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const created = await createChat();
+    activeChatId = created.id;
+    setChatTitle(created.title);
+    clearMessages();
+    await refreshChatList();
+    showAppView();
+    composerInput.focus();
+  } catch (error) {
+    console.error(error);
+    window.alert(`Could not create chat: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
 });
 
-composerForm.addEventListener("submit", (event) => {
+composerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (busy) {
+    return;
+  }
+
   const text = composerInput.value.trim();
   if (!text) {
     return;
   }
 
-  // Step 8: POST /api/messages
-  appendMessage("user", text);
-  composerInput.value = "";
+  if (!activeChatId) {
+    window.alert("Create or select a chat first.");
+    return;
+  }
+
+  setBusy(true);
+  try {
+    appendMessage("user", text);
+    composerInput.value = "";
+
+    const result = await sendMessage(activeChatId, text);
+    appendMessage("assistant", result.reply);
+
+    await refreshChatList();
+    const active = chatSummaries.find((chat) => chat.id === activeChatId);
+    if (active) {
+      setChatTitle(active.title);
+    }
+  } catch (error) {
+    console.error(error);
+    window.alert(`Could not send message: ${error.message}`);
+  } finally {
+    setBusy(false);
+    composerInput.focus();
+  }
 });
 
-renderEmptyChatList();
-showStartView();
+void (async function init() {
+  try {
+    await refreshChatList();
+  } catch (error) {
+    console.error("Failed to load chats:", error);
+    renderChatList();
+  }
+  showStartView();
+})();
