@@ -1,6 +1,6 @@
 mod cache;
+mod chat_completions_api;
 mod embedder;
-mod llm;
 mod models;
 
 use std::sync::Arc;
@@ -10,6 +10,7 @@ use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 use cache::{new_shared, SharedSemanticCache, DEFAULT_THRESHOLD};
+use chat_completions_api::{ChatCompletionsApiClient, SharedChatCompletionsApiClient};
 use embedder::{Embedder, SharedEmbedder};
 
 #[derive(Clone)]
@@ -20,6 +21,9 @@ struct AppState {
     /// Wired into routes in a later step.
     #[allow(dead_code)]
     cache: SharedSemanticCache,
+    /// Wired into routes in a later step. Absent when env is not configured.
+    #[allow(dead_code)]
+    chat_completions_api: Option<SharedChatCompletionsApiClient>,
 }
 
 #[tokio::main]
@@ -46,7 +50,25 @@ async fn main() {
         println!("semantic cache ready");
     }
 
-    let state = AppState { embedder, cache };
+    let chat_completions_api = match ChatCompletionsApiClient::from_env() {
+        Ok(client) => {
+            println!(
+                "chat completions API client ready (model {})",
+                client.model()
+            );
+            Some(Arc::new(client))
+        }
+        Err(err) => {
+            println!("chat completions API client not configured: {err}");
+            None
+        }
+    };
+
+    let state = AppState {
+        embedder,
+        cache,
+        chat_completions_api,
+    };
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))

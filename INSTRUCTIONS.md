@@ -53,7 +53,7 @@ Create the basic folder structure:
 - `src/main.rs`
 - `src/cache.rs`
 - `src/embedder.rs`
-- `src/llm.rs`
+- `src/chat_completions_api.rs`
 - `src/models.rs`
 - `static/` folder for frontend files
 
@@ -90,7 +90,7 @@ Make it thread-safe with `Arc<RwLock<...>>`.
 
 **Instruction 4 – Chat Completions Client**
 
-Implement `src/llm.rs`.  
+Implement `src/chat_completions_api.rs`.  
 Create an async client for an OpenAI-compatible Chat Completions endpoint (`POST /v1/chat/completions`).  
 On cache miss, send the user message and return the assistant reply.  
 Configure everything from environment variables (no vendor-specific names in code):
