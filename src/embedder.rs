@@ -3,26 +3,24 @@
 use std::sync::Arc;
 
 use candle_core::Device;
-use sentence_transformers_rs::sentence_transformer::{SentenceTransformer, SentenceTransformerBuilder, Which};
+use sentence_transformers_rs::sentence_transformer::{
+    SentenceTransformer, SentenceTransformerBuilder, Which,
+};
+use thiserror::Error;
 
 /// Expected output size for `all-MiniLM-L6-v2`.
 pub const EMBEDDING_DIM: usize = 384;
 
-#[derive(Debug)]
-pub struct EmbedderError(String);
-
-impl std::fmt::Display for EmbedderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for EmbedderError {}
-
-impl From<String> for EmbedderError {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
+#[derive(Debug, Error)]
+pub enum EmbedderError {
+    #[error("failed to load embedding model: {0}")]
+    Load(String),
+    #[error("failed to embed text: {0}")]
+    Embed(String),
+    #[error("model returned no embedding")]
+    EmptyOutput,
+    #[error("expected {expected}-dim embedding, got {actual}")]
+    UnexpectedDim { expected: usize, actual: usize },
 }
 
 /// CPU sentence embedder. Construct once and share with [`Arc`].
@@ -37,7 +35,7 @@ impl Embedder {
         let model = SentenceTransformerBuilder::with_sentence_transformer(&Which::AllMiniLML6v2)
             .with_device(&device)
             .build()
-            .map_err(|e| EmbedderError(e.to_string()))?;
+            .map_err(|e| EmbedderError::Load(e.to_string()))?;
         Ok(Self { model })
     }
 
@@ -46,18 +44,18 @@ impl Embedder {
         let embeddings = self
             .model
             .embed(&[text])
-            .map_err(|e| EmbedderError(e.to_string()))?;
+            .map_err(|e| EmbedderError::Embed(e.to_string()))?;
 
         let vector = embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| EmbedderError("model returned no embedding".into()))?;
+            .ok_or(EmbedderError::EmptyOutput)?;
 
         if vector.len() != EMBEDDING_DIM {
-            return Err(EmbedderError(format!(
-                "expected {EMBEDDING_DIM}-dim embedding, got {}",
-                vector.len()
-            )));
+            return Err(EmbedderError::UnexpectedDim {
+                expected: EMBEDDING_DIM,
+                actual: vector.len(),
+            });
         }
 
         Ok(vector)

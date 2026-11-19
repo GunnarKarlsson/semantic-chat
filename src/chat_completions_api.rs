@@ -5,34 +5,28 @@
 
 use std::sync::Arc;
 
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 const ENV_BASE_URL: &str = "CHAT_API_BASE_URL";
 const ENV_API_KEY: &str = "CHAT_API_KEY";
 const ENV_MODEL: &str = "CHAT_MODEL";
 
-#[derive(Debug)]
-pub struct ChatCompletionsError(String);
-
-impl std::fmt::Display for ChatCompletionsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for ChatCompletionsError {}
-
-impl From<String> for ChatCompletionsError {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for ChatCompletionsError {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
+#[derive(Debug, Error)]
+pub enum ChatCompletionsError {
+    #[error("missing environment variable {0}")]
+    MissingEnv(&'static str),
+    #[error("{0} is empty")]
+    EmptyEnv(&'static str),
+    #[error("chat completions request failed")]
+    Request(#[source] reqwest::Error),
+    #[error("chat completions HTTP {status}: {body}")]
+    Http { status: StatusCode, body: String },
+    #[error("failed to parse chat completions response")]
+    Parse(#[source] reqwest::Error),
+    #[error("chat completions response had no assistant content")]
+    EmptyContent,
 }
 
 /// HTTP client for an OpenAI-compatible `POST /v1/chat/completions` API.
@@ -47,24 +41,21 @@ pub struct ChatCompletionsApiClient {
 impl ChatCompletionsApiClient {
     /// Build a client from `CHAT_API_BASE_URL`, `CHAT_API_KEY`, and `CHAT_MODEL`.
     pub fn from_env() -> Result<Self, ChatCompletionsError> {
-        let base_url = std::env::var(ENV_BASE_URL).map_err(|_| {
-            ChatCompletionsError(format!("missing environment variable {ENV_BASE_URL}"))
-        })?;
-        let api_key = std::env::var(ENV_API_KEY).map_err(|_| {
-            ChatCompletionsError(format!("missing environment variable {ENV_API_KEY}"))
-        })?;
-        let model = std::env::var(ENV_MODEL).map_err(|_| {
-            ChatCompletionsError(format!("missing environment variable {ENV_MODEL}"))
-        })?;
+        let base_url = std::env::var(ENV_BASE_URL)
+            .map_err(|_| ChatCompletionsError::MissingEnv(ENV_BASE_URL))?;
+        let api_key = std::env::var(ENV_API_KEY)
+            .map_err(|_| ChatCompletionsError::MissingEnv(ENV_API_KEY))?;
+        let model = std::env::var(ENV_MODEL)
+            .map_err(|_| ChatCompletionsError::MissingEnv(ENV_MODEL))?;
 
         if base_url.trim().is_empty() {
-            return Err(ChatCompletionsError(format!("{ENV_BASE_URL} is empty")));
+            return Err(ChatCompletionsError::EmptyEnv(ENV_BASE_URL));
         }
         if api_key.trim().is_empty() {
-            return Err(ChatCompletionsError(format!("{ENV_API_KEY} is empty")));
+            return Err(ChatCompletionsError::EmptyEnv(ENV_API_KEY));
         }
         if model.trim().is_empty() {
-            return Err(ChatCompletionsError(format!("{ENV_MODEL} is empty")));
+            return Err(ChatCompletionsError::EmptyEnv(ENV_MODEL));
         }
 
         Ok(Self {
@@ -97,24 +88,21 @@ impl ChatCompletionsApiClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                ChatCompletionsError(format!("chat completions request failed: {e}"))
-            })?;
+            .map_err(ChatCompletionsError::Request)?;
 
         let status = response.status();
         if !status.is_success() {
-            let detail = response
+            let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "<unreadable body>".to_string());
-            return Err(ChatCompletionsError(format!(
-                "chat completions HTTP {status}: {detail}"
-            )));
+            return Err(ChatCompletionsError::Http { status, body });
         }
 
-        let parsed: ChatCompletionResponse = response.json().await.map_err(|e| {
-            ChatCompletionsError(format!("failed to parse chat completions response: {e}"))
-        })?;
+        let parsed: ChatCompletionResponse = response
+            .json()
+            .await
+            .map_err(ChatCompletionsError::Parse)?;
 
         parsed
             .choices
@@ -123,11 +111,7 @@ impl ChatCompletionsApiClient {
             .and_then(|choice| choice.message)
             .and_then(|message| message.content)
             .filter(|content| !content.is_empty())
-            .ok_or_else(|| {
-                ChatCompletionsError(
-                    "chat completions response had no assistant content".into(),
-                )
-            })
+            .ok_or(ChatCompletionsError::EmptyContent)
     }
 }
 

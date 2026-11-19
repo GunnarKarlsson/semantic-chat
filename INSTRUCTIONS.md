@@ -48,6 +48,7 @@ Add these dependencies to `Cargo.toml`:
 - reqwest (json)
 - uuid
 - chrono
+- thiserror
 
 Create the basic folder structure:
 - `src/main.rs`
