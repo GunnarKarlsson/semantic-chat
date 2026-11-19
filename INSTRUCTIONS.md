@@ -29,6 +29,10 @@ Your job is to implement this system cleanly, following the step-by-step instruc
 
 **Hard rule — each step must compile:** After finishing any instruction, run `cargo build` and fix errors before stopping. The binary must build successfully at the end of every step, even if later features are still stubs. Do not leave the tree in a broken compile state between steps.
 
+**Naming — keep these separate:**
+- **UI chat** = in-app conversations (`ChatSession`, `/api/chats`, `/api/messages`). User-facing threads in the sidebar.
+- **Chat Completions** = remote model HTTP API (`chat_completions_api`, `ChatCompletionsApiClient`). Called only on semantic-cache miss. Never name UI DTOs `ChatRequest`/`ChatResponse`.
+
 Here are **10 step-by-step instructions** you can give to Cursor one by one (or in groups). They take everything from this thread and turn it into a standalone Rust chat app with a semantic cache.
 
 ---
@@ -103,12 +107,12 @@ Handle basic errors gracefully.
 
 ---
 
-**Instruction 5 – Data Models & Chat Sessions**
+**Instruction 5 – Data Models & UI Chat Sessions**
 
-In `src/models.rs` define:
+In `src/models.rs` define UI conversation types (not Completions types):
 - `ChatSession` (id, title, created_at, messages)
 - `Message` (role, content, timestamp)
-- Request/response structs for the API
+- UI HTTP DTOs: `SendMessageRequest`, `SendMessageResponse`, `CreateChatResponse`, `ChatSummary`
 
 In the main app state, keep a `HashMap<Uuid, ChatSession>` protected by a `RwLock`.  
 Support creating a new chat and appending messages.
@@ -120,16 +124,16 @@ Support creating a new chat and appending messages.
 In `src/main.rs` set up an Axum server with these routes:
 
 - `GET /` → serve the frontend
-- `POST /api/chat` → main chat endpoint (does semantic cache lookup, falls back to Chat Completions)
-- `GET /api/chats` → list all chat sessions (id + title + created_at)
-- `GET /api/chats/:id` → get full message history of one chat
-- `POST /api/chats` → create a new empty chat
+- `POST /api/messages` → send a message in a UI chat (semantic cache lookup, falls back to Chat Completions)
+- `GET /api/chats` → list all UI chat sessions (id + title + created_at)
+- `GET /api/chats/:id` → get full message history of one UI chat
+- `POST /api/chats` → create a new empty UI chat
 
-The `/api/chat` endpoint must:
+The `/api/messages` endpoint must:
 1. Embed the user message
 2. Search the semantic cache
 3. On hit → return cached response
-4. On miss → call Chat Completions, store result in cache, return response
+4. On miss → call Chat Completions (`ChatCompletionsApiClient`), store result in cache, return response
 
 ---
 
@@ -161,7 +165,7 @@ In `app.js` implement:
 - Start page behavior: one input in the center. On Enter, create a new chat, send the first message, then switch to the full chat layout.
 - Sidebar: fetch `/api/chats` and render the list. Clicking a chat loads its messages via `/api/chats/:id`.
 - “+” button: creates a new chat and clears the main view.
-- Chat view: display messages (user right-aligned or styled differently from assistant), auto-scroll to bottom, and send new messages to `/api/chat`.
+- Chat view: display messages (user right-aligned or styled differently from assistant), auto-scroll to bottom, and send new messages to `/api/messages`.
 
 Keep the UI simple, clean, and modern (dark theme preferred).
 

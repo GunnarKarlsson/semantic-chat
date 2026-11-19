@@ -1,4 +1,6 @@
-//! OpenAI-compatible Chat Completions API client (URL, key, and model from env).
+//! Remote OpenAI-compatible **Chat Completions** HTTP client (URL, key, model from env).
+//!
+//! This is not the UI chat/session layer — that lives in `models` (`ChatSession`, etc.).
 //! `complete` is exercised by API routes in a later step.
 
 #![allow(dead_code)]
@@ -73,9 +75,9 @@ impl ChatCompletionsApiClient {
     /// Send a single user message and return the assistant reply text.
     pub async fn complete(&self, user_message: &str) -> Result<String, ChatCompletionsError> {
         let url = format!("{}/v1/chat/completions", self.base_url);
-        let body = ChatCompletionRequest {
+        let body = CompletionsRequest {
             model: self.model.clone(),
-            messages: vec![ChatMessage {
+            messages: vec![CompletionsMessage {
                 role: "user".to_string(),
                 content: user_message.to_string(),
             }],
@@ -99,7 +101,7 @@ impl ChatCompletionsApiClient {
             return Err(ChatCompletionsError::Http { status, body });
         }
 
-        let parsed: ChatCompletionResponse = response
+        let parsed: CompletionsResponse = response
             .json()
             .await
             .map_err(ChatCompletionsError::Parse)?;
@@ -117,30 +119,31 @@ impl ChatCompletionsApiClient {
 
 pub type SharedChatCompletionsApiClient = Arc<ChatCompletionsApiClient>;
 
+/// Wire JSON for the remote Completions API (not UI chat DTOs).
 #[derive(Serialize)]
-struct ChatCompletionRequest {
+struct CompletionsRequest {
     model: String,
-    messages: Vec<ChatMessage>,
+    messages: Vec<CompletionsMessage>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct ChatMessage {
+struct CompletionsMessage {
     role: String,
     content: String,
 }
 
 #[derive(Deserialize)]
-struct ChatCompletionResponse {
-    choices: Vec<ChatChoice>,
+struct CompletionsResponse {
+    choices: Vec<CompletionsChoice>,
 }
 
 #[derive(Deserialize)]
-struct ChatChoice {
-    message: Option<ChatCompletionMessage>,
+struct CompletionsChoice {
+    message: Option<CompletionsAssistantMessage>,
 }
 
 #[derive(Deserialize)]
-struct ChatCompletionMessage {
+struct CompletionsAssistantMessage {
     #[serde(default)]
     content: Option<String>,
 }
