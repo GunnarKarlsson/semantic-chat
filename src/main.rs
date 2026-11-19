@@ -127,6 +127,7 @@ async fn send_message(
         .map_err(|e| ApiError::Internal(format!("embedding task failed: {e}")))?
         .map_err(|e| ApiError::Internal(format!("embedding failed: {e}")))?;
 
+    // Global semantic cache: matches any prior chat's embeddings.
     let cache_hit = {
         let cache = state.cache.read().expect("cache lock poisoned");
         cache.search(&embedding, DEFAULT_THRESHOLD)
@@ -134,7 +135,7 @@ async fn send_message(
 
     let (reply, from_cache) = if let Some(entry) = cache_hit {
         println!(
-            "cache hit for chat {} (cached under chat {}, prompt {:?}, at {})",
+            "cache hit for chat {} (entry from chat {}, prompt {:?}, at {})",
             request.chat_id, entry.chat_id, entry.prompt, entry.timestamp
         );
         (entry.response, true)
@@ -160,7 +161,8 @@ async fn send_message(
         (reply, false)
     };
 
-    {
+    // Always append to the *current* UI chat, including on cache hit.
+    let title = {
         let mut chats = state.chats.write().expect("chat store lock poisoned");
         chats
             .append_message(request.chat_id, Message::user(message))
@@ -168,12 +170,17 @@ async fn send_message(
         chats
             .append_message(request.chat_id, Message::assistant(reply.clone()))
             .map_err(|e| ApiError::NotFound(e.to_string()))?;
-    }
+        chats
+            .get(request.chat_id)
+            .map(|session| session.title.clone())
+            .ok_or_else(|| ApiError::NotFound(format!("chat not found: {}", request.chat_id)))?
+    };
 
     Ok(Json(SendMessageResponse {
         chat_id: request.chat_id,
         reply,
         cache_hit: from_cache,
+        title,
     }))
 }
 

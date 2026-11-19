@@ -99,6 +99,8 @@ pub struct SendMessageResponse {
     pub chat_id: Uuid,
     pub reply: String,
     pub cache_hit: bool,
+    /// Session title after append (from first user message when new).
+    pub title: String,
 }
 
 /// `POST /api/chats` response — new empty UI chat session.
@@ -205,5 +207,18 @@ mod tests {
         let session = store.get(id).unwrap();
         assert_eq!(session.title, "How does the semantic cache work?");
         assert_eq!(session.messages.len(), 1);
+    }
+
+    #[test]
+    fn long_first_message_is_truncated_for_sidebar_title() {
+        let mut store = ChatStore::new();
+        let id = store.create().id;
+        let long = "x".repeat(60);
+        store
+            .append_message(id, Message::user(long))
+            .unwrap();
+        let title = &store.get(id).unwrap().title;
+        assert!(title.ends_with('…'));
+        assert_eq!(title.chars().count(), 49);
     }
 }

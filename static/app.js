@@ -57,7 +57,7 @@ function clearMessages() {
   messageListEl.innerHTML = "";
 }
 
-function appendMessage(role, content) {
+function appendMessage(role, content, options = {}) {
   const bubble = document.createElement("article");
   const normalized = String(role).toLowerCase();
   bubble.className =
@@ -66,6 +66,9 @@ function appendMessage(role, content) {
   const meta = document.createElement("span");
   meta.className = "message-meta";
   meta.textContent = normalized === "user" ? "You" : "Assistant";
+  if (options.cacheHit) {
+    meta.textContent = "Assistant · cached";
+  }
 
   const body = document.createElement("div");
   body.textContent = content;
@@ -191,13 +194,10 @@ startForm.addEventListener("submit", async (event) => {
     appendMessage("user", text);
 
     const result = await sendMessage(created.id, text);
-    appendMessage("assistant", result.reply);
+    appendMessage("assistant", result.reply, { cacheHit: result.cache_hit });
+    setChatTitle(result.title);
 
     await refreshChatList();
-    const active = chatSummaries.find((chat) => chat.id === activeChatId);
-    if (active) {
-      setChatTitle(active.title);
-    }
     startInput.value = "";
     composerInput.value = "";
   } catch (error) {
@@ -257,13 +257,10 @@ composerForm.addEventListener("submit", async (event) => {
     composerInput.value = "";
 
     const result = await sendMessage(activeChatId, text);
-    appendMessage("assistant", result.reply);
+    appendMessage("assistant", result.reply, { cacheHit: result.cache_hit });
+    setChatTitle(result.title);
 
     await refreshChatList();
-    const active = chatSummaries.find((chat) => chat.id === activeChatId);
-    if (active) {
-      setChatTitle(active.title);
-    }
   } catch (error) {
     console.error(error);
     window.alert(`Could not send message: ${error.message}`);

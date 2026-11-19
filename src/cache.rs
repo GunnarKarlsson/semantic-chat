@@ -1,4 +1,7 @@
 //! In-memory semantic cache (embeddings + cosine similarity).
+//!
+//! The cache is **global** across UI chats: `search` never filters by `chat_id`.
+//! `chat_id` is metadata for which session first stored the entry.
 
 use std::sync::{Arc, RwLock};
 
@@ -14,6 +17,7 @@ pub struct CacheEntry {
     pub prompt: String,
     pub response: String,
     pub timestamp: DateTime<Utc>,
+    /// UI chat that first inserted this entry (not a search filter).
     pub chat_id: Uuid,
 }
 
@@ -30,7 +34,7 @@ impl SemanticCache {
         }
     }
 
-    /// Find the entry with the highest cosine similarity at or above `threshold`.
+    /// Find the best global match at or above `threshold` (all chats).
     pub fn search(&self, query_embedding: &[f32], threshold: f32) -> Option<CacheEntry> {
         let mut best: Option<(f32, &CacheEntry)> = None;
 
@@ -118,5 +122,22 @@ mod tests {
 
         let miss = cache.search(&[0.0, 1.0, 0.0], DEFAULT_THRESHOLD);
         assert!(miss.is_none());
+    }
+
+    #[test]
+    fn cache_hits_are_shared_across_chats() {
+        let chat_a = Uuid::new_v4();
+        let chat_b = Uuid::new_v4();
+        let embedding = vec![0.0, 1.0, 0.0];
+
+        let mut cache = SemanticCache::new();
+        cache.insert(embedding.clone(), "what is rust?", "A language.", chat_a);
+
+        let hit = cache
+            .search(&embedding, DEFAULT_THRESHOLD)
+            .expect("expected a global cache hit");
+        assert_eq!(hit.response, "A language.");
+        assert_eq!(hit.chat_id, chat_a);
+        assert_ne!(hit.chat_id, chat_b);
     }
 }
