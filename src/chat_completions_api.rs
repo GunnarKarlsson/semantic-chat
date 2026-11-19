@@ -1,9 +1,6 @@
 //! Remote OpenAI-compatible **Chat Completions** HTTP client (URL, key, model from env).
 //!
 //! This is not the UI chat/session layer — that lives in `models` (`ChatSession`, etc.).
-//! `complete` is exercised by API routes in a later step.
-
-#![allow(dead_code)]
 
 use std::sync::Arc;
 

@@ -5,7 +5,11 @@ mod models;
 
 use std::sync::Arc;
 
-use axum::{routing::get, Router};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
@@ -13,23 +17,15 @@ use cache::{new_shared, SharedSemanticCache, DEFAULT_THRESHOLD};
 use chat_completions_api::{ChatCompletionsApiClient, SharedChatCompletionsApiClient};
 use embedder::{Embedder, SharedEmbedder};
 use models::{
-    new_shared_store, CreateChatResponse, Message, SendMessageRequest, SendMessageResponse,
-    SharedChatStore,
+    new_shared_store, ChatSession, ChatSummary, CreateChatResponse, Message, SendMessageRequest,
+    SendMessageResponse, SharedChatStore,
 };
 
 #[derive(Clone)]
 struct AppState {
-    /// Wired into routes in a later step.
-    #[allow(dead_code)]
     embedder: SharedEmbedder,
-    /// Wired into routes in a later step.
-    #[allow(dead_code)]
     cache: SharedSemanticCache,
-    /// Wired into routes in a later step. Absent when env is not configured.
-    #[allow(dead_code)]
     chat_completions_api: Option<SharedChatCompletionsApiClient>,
-    /// Wired into routes in a later step.
-    #[allow(dead_code)]
     chats: SharedChatStore,
 }
 
@@ -37,25 +33,10 @@ struct AppState {
 async fn main() {
     println!("loading embedding model (all-MiniLM-L6-v2)...");
     let embedder = Arc::new(Embedder::load().expect("failed to load embedding model"));
-    let probe = embedder
-        .embed("ping")
-        .expect("failed to run embedding smoke test");
-    println!("embedding model ready ({} dims)", probe.len());
+    println!("embedding model ready");
 
     let cache = new_shared();
-    {
-        let mut guard = cache.write().expect("cache lock poisoned");
-        guard.insert(probe.clone(), "ping", "pong", Uuid::nil());
-        let hit = guard
-            .search(&probe, DEFAULT_THRESHOLD)
-            .expect("cache smoke test missed exact embedding");
-        assert_eq!(hit.prompt, "ping");
-        assert_eq!(hit.response, "pong");
-        assert_eq!(hit.chat_id, Uuid::nil());
-        assert_eq!(hit.embedding.len(), probe.len());
-        let _ = hit.timestamp;
-        println!("semantic cache ready");
-    }
+    println!("semantic cache ready");
 
     let chat_completions_api = match ChatCompletionsApiClient::from_env() {
         Ok(client) => {
@@ -72,37 +53,7 @@ async fn main() {
     };
 
     let chats = new_shared_store();
-    {
-        let mut guard = chats.write().expect("chat store lock poisoned");
-        let session = guard.create();
-        let id = session.id;
-        guard
-            .append_message(id, Message::user("hello"))
-            .expect("failed to append user message");
-        guard
-            .append_message(id, Message::assistant("hi"))
-            .expect("failed to append assistant message");
-        let listed = guard.list();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].title, "hello");
-        let session = guard.get(id).expect("chat missing after create");
-        assert_eq!(session.messages.len(), 2);
-        let _ = CreateChatResponse::from(session);
-        let req = SendMessageRequest {
-            chat_id: id,
-            message: "hello".to_string(),
-        };
-        assert_eq!(req.chat_id, id);
-        assert_eq!(req.message, "hello");
-        let resp = SendMessageResponse {
-            chat_id: id,
-            reply: "hi".to_string(),
-            cache_hit: false,
-        };
-        assert_eq!(resp.reply, "hi");
-        assert!(!resp.cache_hit);
-        println!("chat store ready");
-    }
+    println!("chat store ready");
 
     let state = AppState {
         embedder,
@@ -113,6 +64,9 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/api/messages", post(send_message))
+        .route("/api/chats", get(list_chats).post(create_chat))
+        .route("/api/chats/{id}", get(get_chat))
         .fallback_service(ServeDir::new("static"))
         .with_state(state);
 
@@ -122,4 +76,123 @@ async fn main() {
 
     println!("listening on http://0.0.0.0:3000");
     axum::serve(listener, app).await.expect("server error");
+}
+
+async fn list_chats(State(state): State<AppState>) -> Json<Vec<ChatSummary>> {
+    let chats = state.chats.read().expect("chat store lock poisoned");
+    Json(chats.list())
+}
+
+async fn create_chat(State(state): State<AppState>) -> Json<CreateChatResponse> {
+    let mut chats = state.chats.write().expect("chat store lock poisoned");
+    let session = chats.create();
+    Json(CreateChatResponse::from(&session))
+}
+
+async fn get_chat(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ChatSession>, ApiError> {
+    let chats = state.chats.read().expect("chat store lock poisoned");
+    let session = chats
+        .get(id)
+        .cloned()
+        .ok_or(ApiError::NotFound(format!("chat not found: {id}")))?;
+    Ok(Json(session))
+}
+
+async fn send_message(
+    State(state): State<AppState>,
+    Json(request): Json<SendMessageRequest>,
+) -> Result<Json<SendMessageResponse>, ApiError> {
+    let message = request.message.trim().to_string();
+    if message.is_empty() {
+        return Err(ApiError::BadRequest("message must not be empty".into()));
+    }
+
+    {
+        let chats = state.chats.read().expect("chat store lock poisoned");
+        if chats.get(request.chat_id).is_none() {
+            return Err(ApiError::NotFound(format!(
+                "chat not found: {}",
+                request.chat_id
+            )));
+        }
+    }
+
+    let embedder = state.embedder.clone();
+    let embed_text = message.clone();
+    let embedding = tokio::task::spawn_blocking(move || embedder.embed(&embed_text))
+        .await
+        .map_err(|e| ApiError::Internal(format!("embedding task failed: {e}")))?
+        .map_err(|e| ApiError::Internal(format!("embedding failed: {e}")))?;
+
+    let cache_hit = {
+        let cache = state.cache.read().expect("cache lock poisoned");
+        cache.search(&embedding, DEFAULT_THRESHOLD)
+    };
+
+    let (reply, from_cache) = if let Some(entry) = cache_hit {
+        println!(
+            "cache hit for chat {} (cached under chat {}, prompt {:?}, at {})",
+            request.chat_id, entry.chat_id, entry.prompt, entry.timestamp
+        );
+        (entry.response, true)
+    } else {
+        println!("cache miss for chat {}", request.chat_id);
+        let client = state.chat_completions_api.as_ref().ok_or_else(|| {
+            ApiError::ServiceUnavailable(
+                "chat completions API is not configured (set CHAT_API_BASE_URL, CHAT_API_KEY, CHAT_MODEL)".into(),
+            )
+        })?;
+
+        println!("calling chat completions API (model {})", client.model());
+        let reply = client
+            .complete(&message)
+            .await
+            .map_err(|e| ApiError::Internal(format!("chat completions failed: {e}")))?;
+
+        {
+            let mut cache = state.cache.write().expect("cache lock poisoned");
+            cache.insert(embedding, message.clone(), reply.clone(), request.chat_id);
+        }
+
+        (reply, false)
+    };
+
+    {
+        let mut chats = state.chats.write().expect("chat store lock poisoned");
+        chats
+            .append_message(request.chat_id, Message::user(message))
+            .map_err(|e| ApiError::NotFound(e.to_string()))?;
+        chats
+            .append_message(request.chat_id, Message::assistant(reply.clone()))
+            .map_err(|e| ApiError::NotFound(e.to_string()))?;
+    }
+
+    Ok(Json(SendMessageResponse {
+        chat_id: request.chat_id,
+        reply,
+        cache_hit: from_cache,
+    }))
+}
+
+#[derive(Debug)]
+enum ApiError {
+    BadRequest(String),
+    NotFound(String),
+    ServiceUnavailable(String),
+    Internal(String),
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        let (status, message) = match self {
+            ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
+            ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message),
+            ApiError::ServiceUnavailable(message) => (StatusCode::SERVICE_UNAVAILABLE, message),
+            ApiError::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
+        };
+        (status, message).into_response()
+    }
 }
