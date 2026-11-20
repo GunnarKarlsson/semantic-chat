@@ -33,6 +33,16 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    match dotenvy::dotenv() {
+        Ok(path) => println!("loaded env from {}", path.display()),
+        Err(err) if err.not_found() => {
+            println!("no .env file found (using process environment only)");
+        }
+        Err(err) => {
+            eprintln!("warning: could not load .env: {err}");
+        }
+    }
+
     println!("loading embedding model (all-MiniLM-L6-v2) on CPU...");
     println!(
         "note: first run may download model files from Hugging Face; later runs use the local cache"

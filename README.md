@@ -12,7 +12,7 @@ The Rust binary (Axum) serves both the JSON API and the static UI in `static/`.
 
 ## Configure Chat Completions
 
-Set these environment variables before starting the server:
+Copy `.env.example` to `.env` (or edit the existing `.env`) in the project root:
 
 | Variable | Meaning | Example |
 | --- | --- | --- |
@@ -20,13 +20,12 @@ Set these environment variables before starting the server:
 | `CHAT_API_KEY` | Bearer token | your API key |
 | `CHAT_MODEL` | Model id | `deepseek-chat` or `gpt-4o-mini` |
 
-### Example (zsh / bash)
-
 ```bash
-export CHAT_API_BASE_URL="https://api.deepseek.com"
-export CHAT_API_KEY="sk-..."
-export CHAT_MODEL="deepseek-chat"
+cp .env.example .env
+# edit .env and replace the placeholder key
 ```
+
+`cargo run` loads `.env` automatically. You can also export the same variables in your shell instead.
 
 Without these, the server still starts (embeddings + UI chats work), but a cache **miss** returns HTTP 503 until Completions is configured.
 
