@@ -347,12 +347,136 @@ input {
 }
 
 .message {
-  max-width: min(720px, 85%);
+  max-width: min(920px, 92%);
   padding: 0.75rem 1rem;
   border-radius: var(--radius);
   line-height: 1.45;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+.message-body {
+  font-size: 0.98rem;
+}
+
+.message-body > :first-child {
+  margin-top: 0;
+}
+
+.message-body > :last-child {
+  margin-bottom: 0;
+}
+
+.message-body h1,
+.message-body h2,
+.message-body h3,
+.message-body h4,
+.message-body h5,
+.message-body h6 {
+  margin: 0.85em 0 0.4em;
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.25;
+  color: #f2f4f8;
+}
+
+.message-body h1 {
+  font-size: 1.35rem;
+}
+
+.message-body h2 {
+  font-size: 1.2rem;
+}
+
+.message-body h3 {
+  font-size: 1.08rem;
+}
+
+.message-body h4,
+.message-body h5,
+.message-body h6 {
+  font-size: 1rem;
+}
+
+.message-body p {
+  margin: 0 0 0.65em;
+}
+
+.message-body ul,
+.message-body ol {
+  margin: 0 0 0.65em;
+  padding-left: 1.25em;
+}
+
+.message-body li {
+  margin: 0.2em 0;
+}
+
+.message-body strong {
+  font-weight: 600;
+  color: #f2f4f8;
+}
+
+.message-body em {
+  font-style: italic;
+}
+
+.message-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.message-body pre {
+  margin: 0 0 0.65em;
+  padding: 0.65rem 0.75rem;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+}
+
+.message-body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.message-body .table-wrap {
+  margin: 0 0 0.65em;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.message-body table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.message-body th,
+.message-body td {
+  padding: 0.45rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.message-body th {
+  font-weight: 600;
+  color: #f2f4f8;
+  background: rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+}
+
+.message-body tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.message-body tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .message-user {

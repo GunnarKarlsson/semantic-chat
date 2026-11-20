@@ -153,6 +153,224 @@ function scheduleAlignBubbleToTop(bubble) {
   });
 }
 
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Inline markdown on already-escaped text. */
+function renderInlineMarkdown(escaped) {
+  return escaped
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
+    .replace(/(^|[^_\w])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>");
+}
+
+function splitTableCells(line) {
+  let row = line.trim();
+  if (row.startsWith("|")) {
+    row = row.slice(1);
+  }
+  if (row.endsWith("|")) {
+    row = row.slice(0, -1);
+  }
+  return row.split("|").map((cell) => cell.trim());
+}
+
+function isTableSeparator(line) {
+  const cells = splitTableCells(line);
+  if (!cells.length) {
+    return false;
+  }
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")));
+}
+
+function looksLikeTableRow(line) {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && (trimmed.startsWith("|") || /\|/.test(trimmed));
+}
+
+function parseAlignments(separatorLine) {
+  return splitTableCells(separatorLine).map((cell) => {
+    const compact = cell.replace(/\s/g, "");
+    const left = compact.startsWith(":");
+    const right = compact.endsWith(":");
+    if (left && right) {
+      return "center";
+    }
+    if (right) {
+      return "right";
+    }
+    return "left";
+  });
+}
+
+function renderMarkdownTable(headerLine, separatorLine, bodyLines) {
+  const headers = splitTableCells(headerLine);
+  const alignments = parseAlignments(separatorLine);
+  const colCount = headers.length;
+
+  const ths = headers
+    .map((cell, index) => {
+      const align = alignments[index] || "left";
+      return `<th style="text-align:${align}">${renderInlineMarkdown(cell)}</th>`;
+    })
+    .join("");
+
+  const rows = bodyLines
+    .map((line) => {
+      const cells = splitTableCells(line);
+      while (cells.length < colCount) {
+        cells.push("");
+      }
+      const tds = cells
+        .slice(0, colCount)
+        .map((cell, index) => {
+          const align = alignments[index] || "left";
+          return `<td style="text-align:${align}">${renderInlineMarkdown(cell)}</td>`;
+        })
+        .join("");
+      return `<tr>${tds}</tr>`;
+    })
+    .join("");
+
+  return `<div class="table-wrap"><table><thead><tr>${ths}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+/**
+ * Safe subset of Markdown → HTML (escape first, then add our own tags).
+ * Supports: headings, **bold**, *italic*, `code`, fences, lists, tables, paragraphs.
+ */
+function markdownToHtml(src) {
+  const text = String(src ?? "");
+  const fences = [];
+  const withPlaceholders = text.replace(/```([\s\S]*?)```/g, (_, code) => {
+    const index = fences.length;
+    fences.push(`<pre><code>${escapeHtml(code.replace(/^\n+|\n+$/g, ""))}</code></pre>`);
+    return `\u0000FENCE${index}\u0000`;
+  });
+
+  const escaped = escapeHtml(withPlaceholders);
+  const lines = escaped.split("\n");
+  const blocks = [];
+  let paragraph = [];
+  let listItems = [];
+  let listTag = null;
+  let index = 0;
+
+  function flushParagraph() {
+    if (!paragraph.length) {
+      return;
+    }
+    const html = renderInlineMarkdown(paragraph.join("<br>"));
+    blocks.push(`<p>${html}</p>`);
+    paragraph = [];
+  }
+
+  function flushList() {
+    if (!listTag || !listItems.length) {
+      listItems = [];
+      listTag = null;
+      return;
+    }
+    const items = listItems
+      .map((item) => `<li>${renderInlineMarkdown(item)}</li>`)
+      .join("");
+    blocks.push(`<${listTag}>${items}</${listTag}>`);
+    listItems = [];
+    listTag = null;
+  }
+
+  while (index < lines.length) {
+    const line = lines[index];
+
+    const fenceMatch = line.match(/^\u0000FENCE(\d+)\u0000$/);
+    if (fenceMatch) {
+      flushParagraph();
+      flushList();
+      blocks.push(fences[Number(fenceMatch[1])]);
+      index += 1;
+      continue;
+    }
+
+    // GFM pipe table: header + separator + body rows
+    if (
+      looksLikeTableRow(line) &&
+      index + 1 < lines.length &&
+      isTableSeparator(lines[index + 1])
+    ) {
+      flushParagraph();
+      flushList();
+      const headerLine = line;
+      const separatorLine = lines[index + 1];
+      const bodyLines = [];
+      index += 2;
+      while (index < lines.length && looksLikeTableRow(lines[index])) {
+        bodyLines.push(lines[index]);
+        index += 1;
+      }
+      blocks.push(renderMarkdownTable(headerLine, separatorLine, bodyLines));
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+?)(?:\s+#*)?$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1].length;
+      blocks.push(
+        `<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`
+      );
+      index += 1;
+      continue;
+    }
+
+    const unordered = line.match(/^[-*]\s+(.+)$/);
+    if (unordered) {
+      flushParagraph();
+      if (listTag && listTag !== "ul") {
+        flushList();
+      }
+      listTag = "ul";
+      listItems.push(unordered[1]);
+      index += 1;
+      continue;
+    }
+
+    const ordered = line.match(/^\d+\.\s+(.+)$/);
+    if (ordered) {
+      flushParagraph();
+      if (listTag && listTag !== "ol") {
+        flushList();
+      }
+      listTag = "ol";
+      listItems.push(ordered[1]);
+      index += 1;
+      continue;
+    }
+
+    if (line.trim() === "") {
+      flushParagraph();
+      flushList();
+      index += 1;
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line);
+    index += 1;
+  }
+
+  flushParagraph();
+  flushList();
+  return blocks.join("") || `<p>${renderInlineMarkdown(escaped)}</p>`;
+}
+
 function appendMessage(role, content, options = {}) {
   const bubble = document.createElement("article");
   const normalized = String(role).toLowerCase();
@@ -170,7 +388,12 @@ function appendMessage(role, content, options = {}) {
   }
 
   const body = document.createElement("div");
-  body.textContent = content;
+  body.className = "message-body";
+  if (options.error) {
+    body.textContent = content;
+  } else {
+    body.innerHTML = markdownToHtml(content);
+  }
 
   bubble.appendChild(meta);
   bubble.appendChild(body);
