@@ -4,6 +4,8 @@
  */
 
 const MESSAGE_TIMEOUT_MS = 60_000;
+/** Extra space above a newly arrived reply when aligning it into view. */
+const REPLY_TOP_GAP_PX = 50;
 
 const viewStart = document.getElementById("view-start");
 const viewApp = document.getElementById("view-app");
@@ -59,6 +61,28 @@ function clearMessages() {
   messageListEl.innerHTML = "";
 }
 
+function scrollMessageListToEnd() {
+  messageListEl.scrollTop = messageListEl.scrollHeight;
+}
+
+/** Pin a bubble's top near the top of the visible message area. */
+function alignBubbleToTop(bubble) {
+  if (!bubble) {
+    return;
+  }
+  const listRect = messageListEl.getBoundingClientRect();
+  const bubbleRect = bubble.getBoundingClientRect();
+  // Use viewport delta so this stays correct for every reply, not only the first.
+  messageListEl.scrollTop += bubbleRect.top - listRect.top - REPLY_TOP_GAP_PX;
+}
+
+function scheduleAlignBubbleToTop(bubble) {
+  // Wait for layout after inserting a (possibly tall) reply.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => alignBubbleToTop(bubble));
+  });
+}
+
 function appendMessage(role, content, options = {}) {
   const bubble = document.createElement("article");
   const normalized = String(role).toLowerCase();
@@ -81,7 +105,14 @@ function appendMessage(role, content, options = {}) {
   bubble.appendChild(meta);
   bubble.appendChild(body);
   messageListEl.appendChild(bubble);
-  messageListEl.scrollTop = messageListEl.scrollHeight;
+
+  // `top` = start reading the reply; `end` = keep latest composer activity in view
+  const scroll = options.scroll || "end";
+  if (scroll === "top") {
+    scheduleAlignBubbleToTop(bubble);
+  } else if (scroll !== "none") {
+    scrollMessageListToEnd();
+  }
   return bubble;
 }
 
@@ -102,7 +133,7 @@ function showTypingIndicator() {
   bubble.appendChild(meta);
   bubble.appendChild(dots);
   messageListEl.appendChild(bubble);
-  messageListEl.scrollTop = messageListEl.scrollHeight;
+  scrollMessageListToEnd();
   return bubble;
 }
 
@@ -237,14 +268,22 @@ async function sendAndShowReply(chatId, text) {
   try {
     const result = await sendMessage(chatId, text);
     removeTypingIndicator(typing);
-    appendMessage("assistant", result.reply, { cacheHit: result.cache_hit });
+    const replyBubble = appendMessage("assistant", result.reply, {
+      cacheHit: result.cache_hit,
+      scroll: "top",
+    });
     setChatTitle(result.title);
     await refreshChatList();
+    // Sidebar refresh can shift layout; re-pin the reply afterward.
+    scheduleAlignBubbleToTop(replyBubble);
     return result;
   } catch (error) {
     removeTypingIndicator(typing);
     if (isAbortError(error)) {
-      appendMessage("assistant", "timeout. try again.", { error: true });
+      appendMessage("assistant", "timeout. try again.", {
+        error: true,
+        scroll: "top",
+      });
       return null;
     }
     throw error;
