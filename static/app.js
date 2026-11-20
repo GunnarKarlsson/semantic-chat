@@ -232,18 +232,66 @@ function renderChatList() {
 
   for (const chat of chatSummaries) {
     const li = document.createElement("li");
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "chat-list-item";
+    li.className = "chat-list-row";
     if (chat.id === activeChatId) {
-      btn.classList.add("is-active");
+      li.classList.add("is-active");
     }
-    btn.textContent = chat.title || "New chat";
-    btn.addEventListener("click", () => {
+
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "chat-list-item";
+    openBtn.textContent = chat.title || "New chat";
+    openBtn.addEventListener("click", () => {
       void selectChat(chat.id);
     });
-    li.appendChild(btn);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "chat-delete-btn";
+    deleteBtn.title = "Delete chat";
+    deleteBtn.setAttribute("aria-label", `Delete chat: ${chat.title || "New chat"}`);
+    deleteBtn.textContent = "×";
+    deleteBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void deleteChat(chat.id, chat.title || "New chat");
+    });
+
+    li.appendChild(openBtn);
+    li.appendChild(deleteBtn);
     chatListEl.appendChild(li);
+  }
+}
+
+async function deleteChat(chatId, title) {
+  if (busy) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Delete chat “${title}”? This cannot be undone.`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  setBusy(true);
+  try {
+    await api(`/api/chats/${chatId}`, { method: "DELETE" });
+    chatSummaries = chatSummaries.filter((chat) => chat.id !== chatId);
+
+    if (activeChatId === chatId) {
+      activeChatId = null;
+      setChatTitle("New chat");
+      clearMessages();
+      showStartView();
+    }
+
+    renderChatList();
+  } catch (error) {
+    console.error(error);
+    window.alert(`Could not delete chat: ${error.message}`);
+  } finally {
+    setBusy(false);
   }
 }
 

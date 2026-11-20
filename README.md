@@ -2,7 +2,7 @@
 
 A local chat app with a **semantic cache**: similar questions reuse a previous answer instead of calling the remote model again.
 
-The Rust binary (Axum) serves both the JSON API and the static UI in `static/`.
+The Rust binary (Axum) serves both the JSON API and the static UI in `static/`. Chats, cache entries, and settings are stored in a local SQLite file.
 
 ## Requirements
 
@@ -44,12 +44,27 @@ Useful checks:
 - Health: [http://localhost:3000/health](http://localhost:3000/health) → `ok`
 - First startup may take a while while the embedding model downloads; later runs reuse the cache under `~/.cache/huggingface/` (typical on macOS/Linux).
 
+## Data on disk
+
+SQLite lives at `data/semantic-chat.db` (created on first run). That directory is gitignored.
+
+It stores:
+
+- Semantic cache entries (embeddings + prompt/response pairs)
+- UI chats and messages
+- Settings (including the similarity threshold)
+
+## UI extras
+
+- **Settings (gear in the sidebar):** shows how many answers are cached; **Clear cache** wipes cache entries only (chats stay).
+- **Delete chat:** the × on each sidebar row removes that chat and its messages. The global semantic cache is unchanged.
+
 ## How it works
 
 1. You send a message in a UI chat.
 2. The server embeds the text with local MiniLM.
-3. The in-memory semantic cache looks for a close match (cosine similarity ≥ 0.92).
+3. The semantic cache looks for a close match (cosine similarity from settings, default 0.92).
 4. **Hit** → return the cached answer (also appended to the current chat).
 5. **Miss** → call Chat Completions, store the pair in the cache, return the reply.
 
-The semantic cache is **global** across sidebar chats; chat history is per session.
+The semantic cache is **global** across sidebar chats; chat history is per session. Both survive restarts via SQLite.
