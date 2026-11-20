@@ -3,6 +3,8 @@
  * UI chats (/api/chats, /api/messages) are separate from remote Chat Completions.
  */
 
+const MESSAGE_TIMEOUT_MS = 60_000;
+
 const viewStart = document.getElementById("view-start");
 const viewApp = document.getElementById("view-app");
 const startForm = document.getElementById("start-form");
@@ -62,6 +64,9 @@ function appendMessage(role, content, options = {}) {
   const normalized = String(role).toLowerCase();
   bubble.className =
     normalized === "user" ? "message message-user" : "message message-assistant";
+  if (options.error) {
+    bubble.classList.add("message-error");
+  }
 
   const meta = document.createElement("span");
   meta.className = "message-meta";
@@ -77,6 +82,34 @@ function appendMessage(role, content, options = {}) {
   bubble.appendChild(body);
   messageListEl.appendChild(bubble);
   messageListEl.scrollTop = messageListEl.scrollHeight;
+  return bubble;
+}
+
+function showTypingIndicator() {
+  const bubble = document.createElement("article");
+  bubble.className = "message message-assistant message-pending";
+  bubble.dataset.typing = "true";
+
+  const meta = document.createElement("span");
+  meta.className = "message-meta";
+  meta.textContent = "Assistant";
+
+  const dots = document.createElement("div");
+  dots.className = "typing-dots";
+  dots.setAttribute("aria-label", "Waiting for reply");
+  dots.innerHTML = "<span></span><span></span><span></span>";
+
+  bubble.appendChild(meta);
+  bubble.appendChild(dots);
+  messageListEl.appendChild(bubble);
+  messageListEl.scrollTop = messageListEl.scrollHeight;
+  return bubble;
+}
+
+function removeTypingIndicator(bubble) {
+  if (bubble && bubble.parentNode) {
+    bubble.parentNode.removeChild(bubble);
+  }
 }
 
 function renderMessages(messages) {
@@ -113,27 +146,52 @@ function renderChatList() {
   }
 }
 
+function isAbortError(error) {
+  return (
+    error?.name === "AbortError" ||
+    (typeof error?.message === "string" &&
+      error.message.toLowerCase().includes("aborted"))
+  );
+}
+
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (options.body && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
 
-  const response = await fetch(path, { ...options, headers });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || `Request failed (${response.status})`);
+  const timeoutMs = options.timeoutMs;
+  const controller = timeoutMs ? new AbortController() : null;
+  let timeoutId = null;
+  if (controller) {
+    timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   }
 
-  if (response.status === 204) {
-    return null;
-  }
+  try {
+    const response = await fetch(path, {
+      ...options,
+      headers,
+      signal: controller ? controller.signal : options.signal,
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `Request failed (${response.status})`);
+    }
 
-  const text = await response.text();
-  if (!text) {
-    return null;
+    if (response.status === 204) {
+      return null;
+    }
+
+    const text = await response.text();
+    if (!text) {
+      return null;
+    }
+    return JSON.parse(text);
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
   }
-  return JSON.parse(text);
 }
 
 async function refreshChatList() {
@@ -170,7 +228,27 @@ async function sendMessage(chatId, message) {
   return api("/api/messages", {
     method: "POST",
     body: JSON.stringify({ chat_id: chatId, message }),
+    timeoutMs: MESSAGE_TIMEOUT_MS,
   });
+}
+
+async function sendAndShowReply(chatId, text) {
+  const typing = showTypingIndicator();
+  try {
+    const result = await sendMessage(chatId, text);
+    removeTypingIndicator(typing);
+    appendMessage("assistant", result.reply, { cacheHit: result.cache_hit });
+    setChatTitle(result.title);
+    await refreshChatList();
+    return result;
+  } catch (error) {
+    removeTypingIndicator(typing);
+    if (isAbortError(error)) {
+      appendMessage("assistant", "timeout. try again.", { error: true });
+      return null;
+    }
+    throw error;
+  }
 }
 
 startForm.addEventListener("submit", async (event) => {
@@ -193,11 +271,7 @@ startForm.addEventListener("submit", async (event) => {
     clearMessages();
     appendMessage("user", text);
 
-    const result = await sendMessage(created.id, text);
-    appendMessage("assistant", result.reply, { cacheHit: result.cache_hit });
-    setChatTitle(result.title);
-
-    await refreshChatList();
+    await sendAndShowReply(created.id, text);
     startInput.value = "";
     composerInput.value = "";
   } catch (error) {
@@ -255,12 +329,7 @@ composerForm.addEventListener("submit", async (event) => {
   try {
     appendMessage("user", text);
     composerInput.value = "";
-
-    const result = await sendMessage(activeChatId, text);
-    appendMessage("assistant", result.reply, { cacheHit: result.cache_hit });
-    setChatTitle(result.title);
-
-    await refreshChatList();
+    await sendAndShowReply(activeChatId, text);
   } catch (error) {
     console.error(error);
     window.alert(`Could not send message: ${error.message}`);
