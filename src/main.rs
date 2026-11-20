@@ -23,13 +23,13 @@ use chat_completions_api::{
 use db::SharedDb;
 use embedder::{Embedder, SharedEmbedder};
 use models::{
-    new_shared_store, ChatSession, ChatSummary, CreateChatResponse, Message, Role,
-    SendMessageRequest, SendMessageResponse, SharedChatStore,
+    load_shared_store, ChatSession, ChatStoreError, ChatSummary, CreateChatResponse, Message,
+    Role, SendMessageRequest, SendMessageResponse, SharedChatStore,
 };
 
 #[derive(Clone)]
 struct AppState {
-    /// Shared with the cache today; chats/settings persistence uses it in later steps.
+    /// Shared with cache/chats; settings persistence uses it in a later step.
     #[allow(dead_code)]
     db: SharedDb,
     embedder: SharedEmbedder,
@@ -111,8 +111,17 @@ async fn main() {
         }
     };
 
-    let chats = new_shared_store();
-    println!("chat store ready");
+    let chats = match load_shared_store(db.clone()) {
+        Ok(chats) => {
+            let count = chats.read().expect("chat store lock poisoned").len();
+            println!("chat store ready ({count} persisted chats)");
+            chats
+        }
+        Err(err) => {
+            eprintln!("failed to load chats from sqlite: {err}");
+            std::process::exit(1);
+        }
+    };
 
     let static_dir = static_dir_path();
     if !static_dir.is_dir() {
@@ -173,10 +182,14 @@ async fn list_chats(State(state): State<AppState>) -> Json<Vec<ChatSummary>> {
     Json(chats.list())
 }
 
-async fn create_chat(State(state): State<AppState>) -> Json<CreateChatResponse> {
+async fn create_chat(
+    State(state): State<AppState>,
+) -> Result<Json<CreateChatResponse>, ApiError> {
     let mut chats = state.chats.write().expect("chat store lock poisoned");
-    let session = chats.create();
-    Json(CreateChatResponse::from(&session))
+    let session = chats
+        .create()
+        .map_err(|e| ApiError::Internal(format!("failed to persist chat: {e}")))?;
+    Ok(Json(CreateChatResponse::from(&session)))
 }
 
 async fn get_chat(
@@ -284,10 +297,10 @@ async fn send_message(
         let mut chats = state.chats.write().expect("chat store lock poisoned");
         chats
             .append_message(request.chat_id, Message::user(message))
-            .map_err(|e| ApiError::NotFound(e.to_string()))?;
+            .map_err(map_chat_store_error)?;
         chats
             .append_message(request.chat_id, Message::assistant(reply.clone()))
-            .map_err(|e| ApiError::NotFound(e.to_string()))?;
+            .map_err(map_chat_store_error)?;
         chats
             .get(request.chat_id)
             .map(|session| session.title.clone())
@@ -300,6 +313,15 @@ async fn send_message(
         cache_hit: from_cache,
         title,
     }))
+}
+
+fn map_chat_store_error(err: ChatStoreError) -> ApiError {
+    match err {
+        ChatStoreError::NotFound(id) => ApiError::NotFound(format!("chat not found: {id}")),
+        ChatStoreError::Db(err) => {
+            ApiError::Internal(format!("failed to persist chat message: {err}"))
+        }
+    }
 }
 
 #[derive(Debug)]

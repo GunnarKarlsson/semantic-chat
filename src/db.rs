@@ -9,6 +9,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::cache::CacheEntry;
+use crate::models::{ChatSession, Message, Role};
 
 /// Default cosine-similarity threshold stored in the `settings` table.
 pub const DEFAULT_SIMILARITY_THRESHOLD: &str = "0.92";
@@ -32,11 +33,13 @@ pub enum DbError {
         value: String,
         source: chrono::ParseError,
     },
-    #[error("invalid chat_id {value}: {source}")]
+    #[error("invalid chat id {value}: {source}")]
     InvalidChatId {
         value: String,
         source: uuid::Error,
     },
+    #[error("invalid message role {0}")]
+    InvalidRole(String),
 }
 
 /// Process-wide shared SQLite connection.
@@ -168,6 +171,114 @@ pub fn clear_cache_entries(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Load all UI chats with messages ordered by `position`.
+pub fn load_chat_sessions(conn: &Connection) -> Result<Vec<ChatSession>, DbError> {
+    let mut chat_stmt =
+        conn.prepare("SELECT id, title, created_at FROM chats ORDER BY created_at ASC")?;
+    let chat_rows = chat_stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let title: String = row.get(1)?;
+        let created_at: String = row.get(2)?;
+        Ok((id, title, created_at))
+    })?;
+
+    let mut sessions = Vec::new();
+    for row in chat_rows {
+        let (id, title, created_at) = row?;
+        let id = parse_chat_id(&id)?;
+        sessions.push(ChatSession {
+            id,
+            title,
+            created_at: parse_timestamp(&created_at)?,
+            messages: load_messages_for_chat(conn, id)?,
+        });
+    }
+    Ok(sessions)
+}
+
+fn load_messages_for_chat(conn: &Connection, chat_id: Uuid) -> Result<Vec<Message>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT role, content, timestamp
+         FROM messages
+         WHERE chat_id = ?1
+         ORDER BY position ASC",
+    )?;
+
+    let rows = stmt.query_map(params![chat_id.to_string()], |row| {
+        let role: String = row.get(0)?;
+        let content: String = row.get(1)?;
+        let timestamp: String = row.get(2)?;
+        Ok((role, content, timestamp))
+    })?;
+
+    let mut messages = Vec::new();
+    for row in rows {
+        let (role, content, timestamp) = row?;
+        messages.push(Message {
+            role: parse_role(&role)?,
+            content,
+            timestamp: parse_timestamp(&timestamp)?,
+        });
+    }
+    Ok(messages)
+}
+
+/// Insert a new empty chat row.
+pub fn insert_chat(conn: &Connection, session: &ChatSession) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT INTO chats (id, title, created_at) VALUES (?1, ?2, ?3)",
+        params![
+            session.id.to_string(),
+            session.title,
+            session.created_at.to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Append one message and optionally update the chat title.
+pub fn insert_message(
+    conn: &mut Connection,
+    chat_id: Uuid,
+    message: &Message,
+    position: i64,
+    title: &str,
+) -> Result<(), DbError> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO messages (chat_id, role, content, timestamp, position)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            chat_id.to_string(),
+            role_to_str(&message.role),
+            message.content,
+            message.timestamp.to_rfc3339(),
+            position,
+        ],
+    )?;
+    tx.execute(
+        "UPDATE chats SET title = ?1 WHERE id = ?2",
+        params![title, chat_id.to_string()],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn role_to_str(role: &Role) -> &'static str {
+    match role {
+        Role::User => "user",
+        Role::Assistant => "assistant",
+    }
+}
+
+fn parse_role(value: &str) -> Result<Role, DbError> {
+    match value {
+        "user" => Ok(Role::User),
+        "assistant" => Ok(Role::Assistant),
+        other => Err(DbError::InvalidRole(other.to_string())),
+    }
+}
+
 pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(embedding.len() * 4);
     for value in embedding {
@@ -282,6 +393,37 @@ mod tests {
             assert_eq!(loaded[0].chat_id, entry.chat_id);
             clear_cache_entries(&conn).expect("clear");
             assert!(load_cache_entries(&conn).unwrap().is_empty());
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn chat_session_round_trips_through_sqlite() {
+        let dir = std::env::temp_dir().join(format!("semantic-chat-chats-{}", Uuid::new_v4()));
+        let path = dir.join("semantic-chat.db");
+        let db = open(&path).expect("open db");
+
+        let mut session = ChatSession::new();
+        session.title = "Hello".into();
+        let user = Message::user("Hello");
+        let assistant = Message::assistant("Hi there");
+
+        {
+            let mut conn = db.lock().expect("db lock");
+            insert_chat(&conn, &session).expect("insert chat");
+            insert_message(&mut conn, session.id, &user, 0, "Hello").expect("insert user");
+            insert_message(&mut conn, session.id, &assistant, 1, "Hello").expect("insert assistant");
+
+            let loaded = load_chat_sessions(&conn).expect("load");
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(loaded[0].id, session.id);
+            assert_eq!(loaded[0].title, "Hello");
+            assert_eq!(loaded[0].messages.len(), 2);
+            assert_eq!(loaded[0].messages[0].content, "Hello");
+            assert_eq!(loaded[0].messages[1].content, "Hi there");
+            assert_eq!(loaded[0].messages[0].role, Role::User);
+            assert_eq!(loaded[0].messages[1].role, Role::Assistant);
         }
 
         let _ = std::fs::remove_dir_all(&dir);
