@@ -209,6 +209,24 @@ impl ChatStore {
         session.append_message(message);
         Ok(session)
     }
+
+    /// Delete a chat from SQLite (messages cascade) and memory.
+    pub fn delete(&mut self, id: Uuid) -> Result<(), ChatStoreError> {
+        if !self.sessions.contains_key(&id) {
+            return Err(ChatStoreError::NotFound(id));
+        }
+
+        {
+            let conn = self.db.lock().expect("db lock poisoned");
+            let removed = db::delete_chat(&conn, id)?;
+            if !removed {
+                return Err(ChatStoreError::NotFound(id));
+            }
+        }
+
+        self.sessions.remove(&id);
+        Ok(())
+    }
 }
 
 pub type SharedChatStore = Arc<RwLock<ChatStore>>;
@@ -299,6 +317,34 @@ mod tests {
         assert_eq!(session.messages.len(), 2);
         assert_eq!(session.messages[0].content, "persist me");
         assert_eq!(session.messages[1].content, "ok");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_removes_chat_from_memory_and_db() {
+        let dir = std::env::temp_dir().join(format!("semantic-chat-delete-{}", Uuid::new_v4()));
+        let path = dir.join("semantic-chat.db");
+        let shared = db::open(&path).expect("open db");
+
+        let chat_id = {
+            let mut store = ChatStore::load(shared.clone()).unwrap();
+            let id = store.create().unwrap().id;
+            store
+                .append_message(id, Message::user("bye"))
+                .unwrap();
+            store.delete(id).unwrap();
+            assert_eq!(store.len(), 0);
+            assert!(store.get(id).is_none());
+            assert!(matches!(
+                store.delete(id),
+                Err(ChatStoreError::NotFound(_))
+            ));
+            id
+        };
+
+        let store = ChatStore::load(shared).unwrap();
+        assert_eq!(store.len(), 0);
+        assert!(store.get(chat_id).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -160,7 +160,7 @@ async fn main() {
         .route("/health", get(health))
         .route("/api/messages", post(send_message))
         .route("/api/chats", get(list_chats).post(create_chat))
-        .route("/api/chats/{id}", get(get_chat))
+        .route("/api/chats/{id}", get(get_chat).delete(delete_chat))
         .route("/api/settings", get(get_settings))
         .route("/api/settings/clear-cache", post(clear_cache))
         .fallback_service(
@@ -244,6 +244,16 @@ async fn get_chat(
         .cloned()
         .ok_or(ApiError::NotFound(format!("chat not found: {id}")))?;
     Ok(Json(session))
+}
+
+async fn delete_chat(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let mut chats = state.chats.write().expect("chat store lock poisoned");
+    chats.delete(id).map_err(map_chat_store_error)?;
+    println!("deleted chat {id}");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn send_message(

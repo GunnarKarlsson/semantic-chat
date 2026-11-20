@@ -243,6 +243,15 @@ pub fn insert_chat(conn: &Connection, session: &ChatSession) -> Result<(), DbErr
     Ok(())
 }
 
+/// Delete a chat and its messages (CASCADE). Returns whether a row was removed.
+pub fn delete_chat(conn: &Connection, chat_id: Uuid) -> Result<bool, DbError> {
+    let removed = conn.execute(
+        "DELETE FROM chats WHERE id = ?1",
+        params![chat_id.to_string()],
+    )?;
+    Ok(removed > 0)
+}
+
 /// Append one message and optionally update the chat title.
 pub fn insert_message(
     conn: &mut Connection,
@@ -462,6 +471,14 @@ mod tests {
             assert_eq!(loaded[0].messages[1].content, "Hi there");
             assert_eq!(loaded[0].messages[0].role, Role::User);
             assert_eq!(loaded[0].messages[1].role, Role::Assistant);
+
+            assert!(delete_chat(&conn, session.id).unwrap());
+            assert!(load_chat_sessions(&conn).unwrap().is_empty());
+            let message_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(message_count, 0);
+            assert!(!delete_chat(&conn, session.id).unwrap());
         }
 
         let _ = std::fs::remove_dir_all(&dir);
