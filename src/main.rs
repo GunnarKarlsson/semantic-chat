@@ -1,5 +1,6 @@
 mod cache;
 mod chat_completions_api;
+mod db;
 mod embedder;
 mod models;
 
@@ -19,6 +20,7 @@ use cache::{new_shared, SharedSemanticCache, DEFAULT_THRESHOLD};
 use chat_completions_api::{
     ChatCompletionsApiClient, CompletionsMessage, SharedChatCompletionsApiClient,
 };
+use db::SharedDb;
 use embedder::{Embedder, SharedEmbedder};
 use models::{
     new_shared_store, ChatSession, ChatSummary, CreateChatResponse, Message, Role,
@@ -27,6 +29,9 @@ use models::{
 
 #[derive(Clone)]
 struct AppState {
+    /// Held for write-through persistence in later steps.
+    #[allow(dead_code)]
+    db: SharedDb,
     embedder: SharedEmbedder,
     cache: SharedSemanticCache,
     chat_completions_api: Option<SharedChatCompletionsApiClient>,
@@ -44,6 +49,17 @@ async fn main() {
             eprintln!("warning: could not load .env: {err}");
         }
     }
+
+    let db = match db::open_default() {
+        Ok((db, path)) => {
+            println!("sqlite ready at {}", path.display());
+            db
+        }
+        Err(err) => {
+            eprintln!("failed to open sqlite database: {err}");
+            std::process::exit(1);
+        }
+    };
 
     println!("loading embedding model (all-MiniLM-L6-v2) on CPU...");
     println!(
@@ -98,6 +114,7 @@ async fn main() {
     }
 
     let state = AppState {
+        db,
         embedder,
         cache,
         chat_completions_api,
