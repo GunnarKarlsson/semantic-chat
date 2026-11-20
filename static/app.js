@@ -12,6 +12,11 @@ const viewApp = document.getElementById("view-app");
 const startForm = document.getElementById("start-form");
 const startInput = document.getElementById("start-input");
 const newChatBtn = document.getElementById("new-chat-btn");
+const settingsBtn = document.getElementById("settings-btn");
+const settingsDialog = document.getElementById("settings-dialog");
+const settingsCloseBtn = document.getElementById("settings-close-btn");
+const clearCacheBtn = document.getElementById("clear-cache-btn");
+const cacheEntryCountEl = document.getElementById("cache-entry-count");
 const chatListEl = document.getElementById("chat-list");
 const chatTitleEl = document.getElementById("chat-title");
 const messageListEl = document.getElementById("message-list");
@@ -45,11 +50,76 @@ function setBusy(isBusy) {
   startInput.disabled = isBusy;
   composerInput.disabled = isBusy;
   newChatBtn.disabled = isBusy;
+  settingsBtn.disabled = isBusy;
+  clearCacheBtn.disabled = isBusy;
   const submitButtons = document.querySelectorAll(
     '#start-form button[type="submit"], #composer-form button[type="submit"]'
   );
   for (const button of submitButtons) {
     button.disabled = isBusy;
+  }
+}
+
+function setCacheEntryCount(count) {
+  cacheEntryCountEl.textContent = String(count ?? 0);
+}
+
+async function loadSettings() {
+  const settings = await api("/api/settings");
+  setCacheEntryCount(settings.cache_entry_count);
+  return settings;
+}
+
+async function openSettings() {
+  if (busy) {
+    return;
+  }
+
+  setBusy(true);
+  try {
+    await loadSettings();
+    if (typeof settingsDialog.showModal === "function") {
+      settingsDialog.showModal();
+    } else {
+      settingsDialog.setAttribute("open", "");
+    }
+  } catch (error) {
+    console.error(error);
+    window.alert(`Could not load settings: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function closeSettings() {
+  if (typeof settingsDialog.close === "function") {
+    settingsDialog.close();
+  } else {
+    settingsDialog.removeAttribute("open");
+  }
+}
+
+async function clearCache() {
+  if (busy) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    "Clear all cached answers? Your chats will stay."
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const settings = await api("/api/settings/clear-cache", { method: "POST" });
+    setCacheEntryCount(settings.cache_entry_count);
+  } catch (error) {
+    console.error(error);
+    window.alert(`Could not clear cache: ${error.message}`);
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -346,6 +416,18 @@ newChatBtn.addEventListener("click", async () => {
   } finally {
     setBusy(false);
   }
+});
+
+settingsBtn.addEventListener("click", () => {
+  void openSettings();
+});
+
+settingsCloseBtn.addEventListener("click", () => {
+  closeSettings();
+});
+
+clearCacheBtn.addEventListener("click", () => {
+  void clearCache();
 });
 
 composerForm.addEventListener("submit", async (event) => {

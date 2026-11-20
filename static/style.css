@@ -10,6 +10,8 @@
   --user-bubble: #243447;
   --assistant-bubble: #1e222c;
   --danger-soft: #3a2a2a;
+  --danger: #d96b6b;
+  --danger-btn-bg: #3a2222;
   --radius: 12px;
   --font: "IBM Plex Sans", system-ui, sans-serif;
   --font-display: "IBM Plex Serif", Georgia, serif;
@@ -139,9 +141,18 @@ input {
   font-size: 0.95rem;
 }
 
+.sidebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .icon-btn {
+  display: inline-grid;
+  place-items: center;
   width: 2rem;
   height: 2rem;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-elevated);
@@ -153,6 +164,81 @@ input {
 .icon-btn:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.icon-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.icon-gear {
+  width: 1.05rem;
+  height: 1.05rem;
+  display: block;
+}
+
+/* —— Settings dialog —— */
+.settings-dialog {
+  width: min(360px, calc(100vw - 2rem));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.settings-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.settings-panel {
+  padding: 1rem 1.15rem 1.2rem;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.settings-row {
+  margin: 0 0 0.35rem;
+  color: var(--text);
+}
+
+.settings-hint {
+  margin: 0 0 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.danger-btn {
+  width: 100%;
+  padding: 0.7rem 1rem;
+  border: 1px solid #5c3a3a;
+  border-radius: 10px;
+  background: var(--danger-btn-bg);
+  color: #f0c4c4;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.danger-btn:hover {
+  border-color: var(--danger);
+}
+
+.danger-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .chat-list {
