@@ -16,7 +16,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
-use cache::{new_shared, SharedSemanticCache, DEFAULT_THRESHOLD};
+use cache::{load_shared, SharedSemanticCache, DEFAULT_THRESHOLD};
 use chat_completions_api::{
     ChatCompletionsApiClient, CompletionsMessage, SharedChatCompletionsApiClient,
 };
@@ -29,7 +29,7 @@ use models::{
 
 #[derive(Clone)]
 struct AppState {
-    /// Held for write-through persistence in later steps.
+    /// Shared with the cache today; chats/settings persistence uses it in later steps.
     #[allow(dead_code)]
     db: SharedDb,
     embedder: SharedEmbedder,
@@ -80,8 +80,19 @@ async fn main() {
         }
     };
 
-    let cache = new_shared();
-    println!("semantic cache ready (threshold {DEFAULT_THRESHOLD})");
+    let cache = match load_shared(db.clone()) {
+        Ok(cache) => {
+            let count = cache.read().expect("cache lock poisoned").len();
+            println!(
+                "semantic cache ready (threshold {DEFAULT_THRESHOLD}, {count} persisted entries)"
+            );
+            cache
+        }
+        Err(err) => {
+            eprintln!("failed to load semantic cache from sqlite: {err}");
+            std::process::exit(1);
+        }
+    };
 
     let chat_completions_api = match ChatCompletionsApiClient::from_env() {
         Ok(client) => {
@@ -259,7 +270,9 @@ async fn send_message(
         // Cache standalone Q&A from first-turn misses only.
         if prior_messages.is_empty() {
             let mut cache = state.cache.write().expect("cache lock poisoned");
-            cache.insert(embedding, message.clone(), reply.clone(), request.chat_id);
+            cache
+                .insert(embedding, message.clone(), reply.clone(), request.chat_id)
+                .map_err(|e| ApiError::Internal(format!("failed to persist cache entry: {e}")))?;
             println!("stored new cache entry for chat {}", request.chat_id);
         }
 
