@@ -185,10 +185,7 @@ impl ChatStore {
         id: Uuid,
         message: Message,
     ) -> Result<&ChatSession, ChatStoreError> {
-        let session = self
-            .sessions
-            .get(&id)
-            .ok_or(ChatStoreError::NotFound(id))?;
+        let session = self.sessions.get(&id).ok_or(ChatStoreError::NotFound(id))?;
 
         let position = session.messages.len() as i64;
         let title = if session.messages.is_empty() && message.role == Role::User {
@@ -282,9 +279,7 @@ mod tests {
         let (mut store, dir) = temp_store();
         let id = store.create().unwrap().id;
         let long = "x".repeat(60);
-        store
-            .append_message(id, Message::user(long))
-            .unwrap();
+        store.append_message(id, Message::user(long)).unwrap();
         let title = &store.get(id).unwrap().title;
         assert!(title.ends_with('…'));
         assert_eq!(title.chars().count(), 49);
@@ -304,9 +299,7 @@ mod tests {
             store
                 .append_message(id, Message::user("persist me"))
                 .unwrap();
-            store
-                .append_message(id, Message::assistant("ok"))
-                .unwrap();
+            store.append_message(id, Message::assistant("ok")).unwrap();
             id
         };
 
@@ -329,16 +322,11 @@ mod tests {
         let chat_id = {
             let mut store = ChatStore::load(shared.clone()).unwrap();
             let id = store.create().unwrap().id;
-            store
-                .append_message(id, Message::user("bye"))
-                .unwrap();
+            store.append_message(id, Message::user("bye")).unwrap();
             store.delete(id).unwrap();
             assert_eq!(store.len(), 0);
             assert!(store.get(id).is_none());
-            assert!(matches!(
-                store.delete(id),
-                Err(ChatStoreError::NotFound(_))
-            ));
+            assert!(matches!(store.delete(id), Err(ChatStoreError::NotFound(_))));
             id
         };
 

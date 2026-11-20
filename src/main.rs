@@ -16,15 +16,15 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
-use cache::{load_shared, SharedSemanticCache};
+use cache::{SharedSemanticCache, load_shared};
 use chat_completions_api::{
     ChatCompletionsApiClient, CompletionsMessage, SharedChatCompletionsApiClient,
 };
 use db::SharedDb;
 use embedder::{Embedder, SharedEmbedder};
 use models::{
-    load_shared_store, ChatSession, ChatStoreError, ChatSummary, CreateChatResponse, Message,
-    Role, SendMessageRequest, SendMessageResponse, SettingsResponse, SharedChatStore,
+    ChatSession, ChatStoreError, ChatSummary, CreateChatResponse, Message, Role,
+    SendMessageRequest, SendMessageResponse, SettingsResponse, SharedChatStore, load_shared_store,
 };
 
 #[derive(Clone)]
@@ -163,9 +163,7 @@ async fn main() {
         .route("/api/chats/{id}", get(get_chat).delete(delete_chat))
         .route("/api/settings", get(get_settings))
         .route("/api/settings/clear-cache", post(clear_cache))
-        .fallback_service(
-            ServeDir::new(static_dir).append_index_html_on_directories(true),
-        )
+        .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -224,9 +222,7 @@ async fn list_chats(State(state): State<AppState>) -> Json<Vec<ChatSummary>> {
     Json(chats.list())
 }
 
-async fn create_chat(
-    State(state): State<AppState>,
-) -> Result<Json<CreateChatResponse>, ApiError> {
+async fn create_chat(State(state): State<AppState>) -> Result<Json<CreateChatResponse>, ApiError> {
     let mut chats = state.chats.write().expect("chat store lock poisoned");
     let session = chats
         .create()
@@ -267,10 +263,12 @@ async fn send_message(
 
     let prior_messages = {
         let chats = state.chats.read().expect("chat store lock poisoned");
-        let session = chats.get(request.chat_id).ok_or(ApiError::NotFound(format!(
-            "chat not found: {}",
-            request.chat_id
-        )))?;
+        let session = chats
+            .get(request.chat_id)
+            .ok_or(ApiError::NotFound(format!(
+                "chat not found: {}",
+                request.chat_id
+            )))?;
         session.messages.clone()
     };
 

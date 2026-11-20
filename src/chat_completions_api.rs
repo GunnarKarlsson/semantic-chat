@@ -46,8 +46,8 @@ impl ChatCompletionsApiClient {
             .map_err(|_| ChatCompletionsError::MissingEnv(ENV_BASE_URL))?;
         let api_key = std::env::var(ENV_API_KEY)
             .map_err(|_| ChatCompletionsError::MissingEnv(ENV_API_KEY))?;
-        let model = std::env::var(ENV_MODEL)
-            .map_err(|_| ChatCompletionsError::MissingEnv(ENV_MODEL))?;
+        let model =
+            std::env::var(ENV_MODEL).map_err(|_| ChatCompletionsError::MissingEnv(ENV_MODEL))?;
 
         if base_url.trim().is_empty() {
             return Err(ChatCompletionsError::EmptyEnv(ENV_BASE_URL));
@@ -104,10 +104,8 @@ impl ChatCompletionsApiClient {
             return Err(ChatCompletionsError::Http { status, body });
         }
 
-        let parsed: CompletionsResponse = response
-            .json()
-            .await
-            .map_err(ChatCompletionsError::Parse)?;
+        let parsed: CompletionsResponse =
+            response.json().await.map_err(ChatCompletionsError::Parse)?;
 
         parsed
             .choices

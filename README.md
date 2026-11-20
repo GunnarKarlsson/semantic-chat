@@ -1,12 +1,17 @@
 # Semantic Chat
 
+![Rust](https://img.shields.io/badge/rust-1.89.0-orange?logo=rust)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![CI](https://github.com/GunnarKarlsson/semantic-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/GunnarKarlsson/semantic-chat/actions/workflows/ci.yml)
+[![Stars](https://img.shields.io/github/stars/GunnarKarlsson/semantic-chat)](https://github.com/GunnarKarlsson/semantic-chat/stargazers)
+
 A local chat app with a **semantic cache**: similar questions reuse a previous answer instead of calling the remote model again.
 
 The Rust binary (Axum) serves both the JSON API and the static UI in `static/`. Chats, cache entries, and settings are stored in a local SQLite file.
 
 ## Requirements
 
-- Rust toolchain (`cargo`)
+- Rust **1.89.0** (see `rust-toolchain.toml`; `clippy` and `rustfmt` included)
 - Network on first run (downloads `all-MiniLM-L6-v2` from Hugging Face into the local HF cache)
 - Chat Completions credentials (any OpenAI-compatible provider)
 
@@ -58,6 +63,7 @@ It stores:
 
 - **Settings (gear in the sidebar):** shows how many answers are cached; **Clear cache** wipes cache entries only (chats stay).
 - **Delete chat:** the × on each sidebar row removes that chat and its messages. The global semantic cache is unchanged.
+- Assistant replies render a Markdown subset (headings, bold, lists, tables, code).
 
 ## How it works
 
@@ -68,3 +74,19 @@ It stores:
 5. **Miss** → call Chat Completions, store the pair in the cache, return the reply.
 
 The semantic cache is **global** across sidebar chats; chat history is per session. Both survive restarts via SQLite.
+
+## Development checks
+
+CI runs on every push and pull request to `main` (fmt, build, clippy, test, `cargo audit`). Locally:
+
+```bash
+./scripts/ci.sh
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for PR expectations.
+
+## License
+
+Copyright (c) 2026 Gunnar Karlsson. Licensed under the [MIT License](LICENSE).
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).

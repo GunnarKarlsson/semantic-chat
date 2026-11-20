@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -34,10 +34,7 @@ pub enum DbError {
         source: chrono::ParseError,
     },
     #[error("invalid chat id {value}: {source}")]
-    InvalidChatId {
-        value: String,
-        source: uuid::Error,
-    },
+    InvalidChatId { value: String, source: uuid::Error },
     #[error("invalid message role {0}")]
     InvalidRole(String),
     #[error("missing settings key {0}")]
@@ -373,9 +370,7 @@ mod tests {
 
             let tables: Vec<String> = {
                 let mut stmt = conn
-                    .prepare(
-                        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
-                    )
+                    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
                     .unwrap();
                 stmt.query_map([], |row| row.get(0))
                     .unwrap()
@@ -460,7 +455,8 @@ mod tests {
             let mut conn = db.lock().expect("db lock");
             insert_chat(&conn, &session).expect("insert chat");
             insert_message(&mut conn, session.id, &user, 0, "Hello").expect("insert user");
-            insert_message(&mut conn, session.id, &assistant, 1, "Hello").expect("insert assistant");
+            insert_message(&mut conn, session.id, &assistant, 1, "Hello")
+                .expect("insert assistant");
 
             let loaded = load_chat_sessions(&conn).expect("load");
             assert_eq!(loaded.len(), 1);
