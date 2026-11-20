@@ -18,6 +18,8 @@ pub enum ChatCompletionsError {
     MissingEnv(&'static str),
     #[error("{0} is empty")]
     EmptyEnv(&'static str),
+    #[error("chat completions messages list is empty")]
+    EmptyMessages,
     #[error("chat completions request failed")]
     Request(#[source] reqwest::Error),
     #[error("chat completions HTTP {status}: {body}")]
@@ -69,15 +71,19 @@ impl ChatCompletionsApiClient {
         &self.model
     }
 
-    /// Send a single user message and return the assistant reply text.
-    pub async fn complete(&self, user_message: &str) -> Result<String, ChatCompletionsError> {
+    /// Send an ordered conversation (oldest → newest) and return the assistant reply.
+    pub async fn complete(
+        &self,
+        messages: &[CompletionsMessage],
+    ) -> Result<String, ChatCompletionsError> {
+        if messages.is_empty() {
+            return Err(ChatCompletionsError::EmptyMessages);
+        }
+
         let url = format!("{}/v1/chat/completions", self.base_url);
         let body = CompletionsRequest {
             model: self.model.clone(),
-            messages: vec![CompletionsMessage {
-                role: "user".to_string(),
-                content: user_message.to_string(),
-            }],
+            messages: messages.to_vec(),
         };
 
         let response = self
@@ -116,17 +122,33 @@ impl ChatCompletionsApiClient {
 
 pub type SharedChatCompletionsApiClient = Arc<ChatCompletionsApiClient>;
 
-/// Wire JSON for the remote Completions API (not UI chat DTOs).
+/// One turn in the Completions `messages` array (order = conversation time).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletionsMessage {
+    pub role: String,
+    pub content: String,
+}
+
+impl CompletionsMessage {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: content.into(),
+        }
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: content.into(),
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct CompletionsRequest {
     model: String,
     messages: Vec<CompletionsMessage>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct CompletionsMessage {
-    role: String,
-    content: String,
 }
 
 #[derive(Deserialize)]

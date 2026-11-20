@@ -16,11 +16,13 @@ use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 use cache::{new_shared, SharedSemanticCache, DEFAULT_THRESHOLD};
-use chat_completions_api::{ChatCompletionsApiClient, SharedChatCompletionsApiClient};
+use chat_completions_api::{
+    ChatCompletionsApiClient, CompletionsMessage, SharedChatCompletionsApiClient,
+};
 use embedder::{Embedder, SharedEmbedder};
 use models::{
-    new_shared_store, ChatSession, ChatSummary, CreateChatResponse, Message, SendMessageRequest,
-    SendMessageResponse, SharedChatStore,
+    new_shared_store, ChatSession, ChatSummary, CreateChatResponse, Message, Role,
+    SendMessageRequest, SendMessageResponse, SharedChatStore,
 };
 
 #[derive(Clone)]
@@ -170,15 +172,14 @@ async fn send_message(
         return Err(ApiError::BadRequest("message must not be empty".into()));
     }
 
-    {
+    let prior_messages = {
         let chats = state.chats.read().expect("chat store lock poisoned");
-        if chats.get(request.chat_id).is_none() {
-            return Err(ApiError::NotFound(format!(
-                "chat not found: {}",
-                request.chat_id
-            )));
-        }
-    }
+        let session = chats.get(request.chat_id).ok_or(ApiError::NotFound(format!(
+            "chat not found: {}",
+            request.chat_id
+        )))?;
+        session.messages.clone()
+    };
 
     let embedder = state.embedder.clone();
     let embed_text = message.clone();
@@ -187,10 +188,13 @@ async fn send_message(
         .map_err(|e| ApiError::Internal(format!("embedding task failed: {e}")))?
         .map_err(|e| ApiError::Internal(format!("embedding failed: {e}")))?;
 
-    // Global semantic cache: matches any prior chat's embeddings.
-    let cache_hit = {
+    // Only use the semantic cache for the first turn in a thread. Follow-ups need
+    // full Completions history, which a single-prompt cache entry does not capture.
+    let cache_hit = if prior_messages.is_empty() {
         let cache = state.cache.read().expect("cache lock poisoned");
         cache.search(&embedding, DEFAULT_THRESHOLD)
+    } else {
+        None
     };
 
     let (reply, from_cache) = if let Some(entry) = cache_hit {
@@ -200,16 +204,33 @@ async fn send_message(
         );
         (entry.response, true)
     } else {
-        println!("cache miss for chat {}", request.chat_id);
+        println!(
+            "cache miss for chat {} (prior turns: {})",
+            request.chat_id,
+            prior_messages.len()
+        );
         let client = state.chat_completions_api.as_ref().ok_or_else(|| {
             ApiError::ServiceUnavailable(
                 "chat completions API is not configured (set CHAT_API_BASE_URL, CHAT_API_KEY, CHAT_MODEL)".into(),
             )
         })?;
 
-        println!("calling chat completions API (model {})", client.model());
+        let mut completions_messages: Vec<CompletionsMessage> = prior_messages
+            .iter()
+            .map(|m| match m.role {
+                Role::User => CompletionsMessage::user(m.content.clone()),
+                Role::Assistant => CompletionsMessage::assistant(m.content.clone()),
+            })
+            .collect();
+        completions_messages.push(CompletionsMessage::user(message.clone()));
+
+        println!(
+            "calling chat completions API (model {}, {} messages)",
+            client.model(),
+            completions_messages.len()
+        );
         let reply = client
-            .complete(&message)
+            .complete(&completions_messages)
             .await
             .map_err(|e| ApiError::Internal(format!("chat completions failed: {e}")))?;
         println!(
@@ -218,7 +239,8 @@ async fn send_message(
             reply.len()
         );
 
-        {
+        // Cache standalone Q&A from first-turn misses only.
+        if prior_messages.is_empty() {
             let mut cache = state.cache.write().expect("cache lock poisoned");
             cache.insert(embedding, message.clone(), reply.clone(), request.chat_id);
             println!("stored new cache entry for chat {}", request.chat_id);
