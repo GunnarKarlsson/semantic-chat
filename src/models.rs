@@ -113,6 +113,13 @@ pub struct CreateChatResponse {
     pub created_at: DateTime<Utc>,
 }
 
+/// `GET /api/settings` (and clear-cache) response.
+#[derive(Debug, Clone, Serialize)]
+pub struct SettingsResponse {
+    pub similarity_threshold: f32,
+    pub cache_entry_count: usize,
+}
+
 impl From<&ChatSession> for CreateChatResponse {
     fn from(session: &ChatSession) -> Self {
         Self {

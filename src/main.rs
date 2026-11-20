@@ -16,7 +16,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
-use cache::{load_shared, SharedSemanticCache, DEFAULT_THRESHOLD};
+use cache::{load_shared, SharedSemanticCache};
 use chat_completions_api::{
     ChatCompletionsApiClient, CompletionsMessage, SharedChatCompletionsApiClient,
 };
@@ -24,18 +24,20 @@ use db::SharedDb;
 use embedder::{Embedder, SharedEmbedder};
 use models::{
     load_shared_store, ChatSession, ChatStoreError, ChatSummary, CreateChatResponse, Message,
-    Role, SendMessageRequest, SendMessageResponse, SharedChatStore,
+    Role, SendMessageRequest, SendMessageResponse, SettingsResponse, SharedChatStore,
 };
 
 #[derive(Clone)]
 struct AppState {
-    /// Shared with cache/chats; settings persistence uses it in a later step.
+    /// Shared with cache/chats; kept for future settings writes.
     #[allow(dead_code)]
     db: SharedDb,
     embedder: SharedEmbedder,
     cache: SharedSemanticCache,
     chat_completions_api: Option<SharedChatCompletionsApiClient>,
     chats: SharedChatStore,
+    /// Loaded from SQLite `settings` at startup.
+    similarity_threshold: f32,
 }
 
 #[tokio::main]
@@ -80,12 +82,24 @@ async fn main() {
         }
     };
 
+    let similarity_threshold = {
+        let conn = db.lock().expect("db lock poisoned");
+        match db::load_similarity_threshold(&conn) {
+            Ok(threshold) => {
+                println!("similarity threshold {threshold}");
+                threshold
+            }
+            Err(err) => {
+                eprintln!("failed to load similarity threshold: {err}");
+                std::process::exit(1);
+            }
+        }
+    };
+
     let cache = match load_shared(db.clone()) {
         Ok(cache) => {
             let count = cache.read().expect("cache lock poisoned").len();
-            println!(
-                "semantic cache ready (threshold {DEFAULT_THRESHOLD}, {count} persisted entries)"
-            );
+            println!("semantic cache ready ({count} persisted entries)");
             cache
         }
         Err(err) => {
@@ -139,6 +153,7 @@ async fn main() {
         cache,
         chat_completions_api,
         chats,
+        similarity_threshold,
     };
 
     let app = Router::new()
@@ -146,6 +161,8 @@ async fn main() {
         .route("/api/messages", post(send_message))
         .route("/api/chats", get(list_chats).post(create_chat))
         .route("/api/chats/{id}", get(get_chat))
+        .route("/api/settings", get(get_settings))
+        .route("/api/settings/clear-cache", post(clear_cache))
         .fallback_service(
             ServeDir::new(static_dir).append_index_html_on_directories(true),
         )
@@ -175,6 +192,31 @@ fn static_dir_path() -> PathBuf {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn get_settings(State(state): State<AppState>) -> Json<SettingsResponse> {
+    let cache_entry_count = state.cache.read().expect("cache lock poisoned").len();
+    Json(SettingsResponse {
+        similarity_threshold: state.similarity_threshold,
+        cache_entry_count,
+    })
+}
+
+async fn clear_cache(State(state): State<AppState>) -> Result<Json<SettingsResponse>, ApiError> {
+    let cache_entry_count = {
+        let mut cache = state.cache.write().expect("cache lock poisoned");
+        let before = cache.len();
+        cache
+            .clear()
+            .map_err(|e| ApiError::Internal(format!("failed to clear cache: {e}")))?;
+        println!("cleared semantic cache ({before} entries removed)");
+        cache.len()
+    };
+
+    Ok(Json(SettingsResponse {
+        similarity_threshold: state.similarity_threshold,
+        cache_entry_count,
+    }))
 }
 
 async fn list_chats(State(state): State<AppState>) -> Json<Vec<ChatSummary>> {
@@ -233,7 +275,7 @@ async fn send_message(
     // full Completions history, which a single-prompt cache entry does not capture.
     let cache_hit = if prior_messages.is_empty() {
         let cache = state.cache.read().expect("cache lock poisoned");
-        cache.search(&embedding, DEFAULT_THRESHOLD)
+        cache.search(&embedding, state.similarity_threshold)
     } else {
         None
     };

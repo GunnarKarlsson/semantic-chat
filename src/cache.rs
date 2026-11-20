@@ -10,7 +10,9 @@ use uuid::Uuid;
 
 use crate::db::{self, DbError, SharedDb};
 
-/// Default cosine-similarity threshold for a cache hit.
+/// Default cosine-similarity threshold for a cache hit (tests / fallback docs).
+/// Runtime search uses the value loaded from SQLite settings.
+#[allow(dead_code)]
 pub const DEFAULT_THRESHOLD: f32 = 0.92;
 
 #[derive(Debug, Clone)]
@@ -43,12 +45,6 @@ impl SemanticCache {
 
     pub fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    /// Used by tests today; settings/clear-cache API in a later step.
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     /// Find the best global match at or above `threshold` (all chats).
@@ -96,8 +92,6 @@ impl SemanticCache {
     }
 
     /// Remove all entries from SQLite, then from memory.
-    /// Wired to the settings clear-cache endpoint in a later step.
-    #[allow(dead_code)]
     pub fn clear(&mut self) -> Result<(), DbError> {
         {
             let conn = self.db.lock().expect("db lock poisoned");
@@ -220,11 +214,11 @@ mod tests {
         {
             let mut cache = SemanticCache::load(shared.clone()).unwrap();
             cache.clear().unwrap();
-            assert!(cache.is_empty());
+            assert_eq!(cache.len(), 0);
         }
 
         let cache = SemanticCache::load(shared).unwrap();
-        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

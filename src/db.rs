@@ -40,6 +40,13 @@ pub enum DbError {
     },
     #[error("invalid message role {0}")]
     InvalidRole(String),
+    #[error("missing settings key {0}")]
+    MissingSetting(String),
+    #[error("invalid similarity threshold {value}: {source}")]
+    InvalidThreshold {
+        value: String,
+        source: std::num::ParseFloatError,
+    },
 }
 
 /// Process-wide shared SQLite connection.
@@ -264,6 +271,26 @@ pub fn insert_message(
     Ok(())
 }
 
+/// Read the similarity threshold from the settings table.
+pub fn load_similarity_threshold(conn: &Connection) -> Result<f32, DbError> {
+    let value: String = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![SETTING_SIMILARITY_THRESHOLD],
+            |row| row.get(0),
+        )
+        .map_err(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => {
+                DbError::MissingSetting(SETTING_SIMILARITY_THRESHOLD.to_string())
+            }
+            other => DbError::Sqlite(other),
+        })?;
+
+    value
+        .parse::<f32>()
+        .map_err(|source| DbError::InvalidThreshold { value, source })
+}
+
 fn role_to_str(role: &Role) -> &'static str {
     match role {
         Role::User => "user",
@@ -365,6 +392,17 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_similarity_threshold_reads_seeded_value() {
+        let dir = std::env::temp_dir().join(format!("semantic-chat-settings-{}", Uuid::new_v4()));
+        let path = dir.join("semantic-chat.db");
+        let db = open(&path).expect("open db");
+        let conn = db.lock().expect("db lock");
+        let threshold = load_similarity_threshold(&conn).expect("threshold");
+        assert!((threshold - 0.92).abs() < f32::EPSILON);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
