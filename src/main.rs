@@ -3,6 +3,7 @@ mod chat_completions_api;
 mod embedder;
 mod models;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -10,6 +11,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
@@ -31,12 +33,27 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    println!("loading embedding model (all-MiniLM-L6-v2)...");
-    let embedder = Arc::new(Embedder::load().expect("failed to load embedding model"));
-    println!("embedding model ready");
+    println!("loading embedding model (all-MiniLM-L6-v2) on CPU...");
+    println!(
+        "note: first run may download model files from Hugging Face; later runs use the local cache"
+    );
+
+    let embedder = match Embedder::load() {
+        Ok(model) => {
+            println!("embedding model ready");
+            Arc::new(model)
+        }
+        Err(err) => {
+            eprintln!("failed to load embedding model: {err}");
+            eprintln!(
+                "if this is the first run, check network access to Hugging Face, then try again"
+            );
+            std::process::exit(1);
+        }
+    };
 
     let cache = new_shared();
-    println!("semantic cache ready");
+    println!("semantic cache ready (threshold {DEFAULT_THRESHOLD})");
 
     let chat_completions_api = match ChatCompletionsApiClient::from_env() {
         Ok(client) => {
@@ -48,12 +65,25 @@ async fn main() {
         }
         Err(err) => {
             println!("chat completions API client not configured: {err}");
+            println!(
+                "set CHAT_API_BASE_URL, CHAT_API_KEY, and CHAT_MODEL to enable replies on cache miss"
+            );
             None
         }
     };
 
     let chats = new_shared_store();
     println!("chat store ready");
+
+    let static_dir = static_dir_path();
+    if !static_dir.is_dir() {
+        eprintln!(
+            "warning: static directory not found at {} (UI assets will 404)",
+            static_dir.display()
+        );
+    } else {
+        println!("serving UI from {}", static_dir.display());
+    }
 
     let state = AppState {
         embedder,
@@ -63,19 +93,39 @@ async fn main() {
     };
 
     let app = Router::new()
-        .route("/health", get(|| async { "ok" }))
+        .route("/health", get(health))
         .route("/api/messages", post(send_message))
         .route("/api/chats", get(list_chats).post(create_chat))
         .route("/api/chats/{id}", get(get_chat))
-        .fallback_service(ServeDir::new("static"))
+        .fallback_service(
+            ServeDir::new(static_dir).append_index_html_on_directories(true),
+        )
+        .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let addr = "0.0.0.0:3000";
+    let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .expect("failed to bind to port 3000");
+        .unwrap_or_else(|err| {
+            eprintln!("failed to bind to {addr}: {err}");
+            std::process::exit(1);
+        });
 
-    println!("listening on http://0.0.0.0:3000");
-    axum::serve(listener, app).await.expect("server error");
+    println!("listening on http://localhost:3000");
+    if let Err(err) = axum::serve(listener, app).await {
+        eprintln!("server error: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn static_dir_path() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("static")
+}
+
+async fn health() -> &'static str {
+    "ok"
 }
 
 async fn list_chats(State(state): State<AppState>) -> Json<Vec<ChatSummary>> {
@@ -152,10 +202,16 @@ async fn send_message(
             .complete(&message)
             .await
             .map_err(|e| ApiError::Internal(format!("chat completions failed: {e}")))?;
+        println!(
+            "chat completions reply received for chat {} ({} chars)",
+            request.chat_id,
+            reply.len()
+        );
 
         {
             let mut cache = state.cache.write().expect("cache lock poisoned");
             cache.insert(embedding, message.clone(), reply.clone(), request.chat_id);
+            println!("stored new cache entry for chat {}", request.chat_id);
         }
 
         (reply, false)
